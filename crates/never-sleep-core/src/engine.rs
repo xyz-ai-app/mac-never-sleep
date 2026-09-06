@@ -61,8 +61,7 @@ pub enum Input {
     DisplaySlept,
     /// Person asked to darken the panel now. Does not end standby.
     SleepDisplayNow,
-    /// Phone / cloud start. Standby begins, but the first display-sleep still
-    /// respects `user_present` (never fight someone at the keyboard).
+    /// Explicit phone / cloud start uses the same initial display sleep as the app.
     StartRemote,
     StartRemoteWith(DurationPref),
     /// Take over a live session from another process (foreground → menu).
@@ -139,7 +138,7 @@ struct Session {
     elapsed_base_secs: u64,
     initial_display_off_sent: bool,
     last_sleep_display_ms: Option<u64>,
-    /// Remote start: skip the first forced sleep while a person is at the Mac.
+    /// Session handoff: skip the first forced sleep while a person is at the Mac.
     remote: bool,
 }
 
@@ -224,8 +223,8 @@ impl Engine {
         match input {
             Input::Start => self.start(self.config.duration, host, false, &mut effects),
             Input::StartWith(pref) => self.start(pref, host, false, &mut effects),
-            Input::StartRemote => self.start(self.config.duration, host, true, &mut effects),
-            Input::StartRemoteWith(pref) => self.start(pref, host, true, &mut effects),
+            Input::StartRemote => self.start(self.config.duration, host, false, &mut effects),
+            Input::StartRemoteWith(pref) => self.start(pref, host, false, &mut effects),
             Input::Handoff {
                 pref,
                 remaining_secs,
@@ -631,23 +630,26 @@ mod tests {
     }
 
     #[test]
-    fn remote_on_while_user_present_does_not_promise_display_sleep() {
-        let mut eng = Engine::new(cfg());
-        let mut h = host(0);
-        h.hid_idle_ms = 500;
-        h.lid_closed = false;
-        let effects = eng.handle(Input::StartRemote, &h);
-        assert!(eng.is_active());
-        let body = notify_body(&effects);
-        assert!(
-            !body.contains("will sleep in about"),
-            "must not tell the person at the keyboard the display is about to sleep, got {body}"
-        );
-        assert!(
-            body.contains("local control"),
-            "remote start while someone is present should keep display under local control, got {body}"
-        );
-        assert!(!has_sleep(&effects));
+    fn phone_start_matches_app_initial_sleep_and_then_respects_user_presence() {
+        for input in [
+            Input::StartRemote,
+            Input::StartRemoteWith(DurationPref::default()),
+        ] {
+            let mut eng = Engine::new(cfg());
+            let mut h = host(0);
+            h.hid_idle_ms = 500;
+            h.lid_closed = false;
+            let effects = eng.handle(input, &h);
+            assert!(notify_body(&effects).contains("will sleep in about"));
+            assert!(!has_sleep(&effects));
+            h.monotonic_ms = 1_499;
+            assert!(!has_sleep(&eng.handle(Input::Tick, &h)));
+            h.monotonic_ms = 1_500;
+            assert!(has_sleep(&eng.handle(Input::Tick, &h)));
+            h.monotonic_ms = 10_000;
+            h.display_asleep = Some(false);
+            assert!(!has_sleep(&eng.handle(Input::Tick, &h)));
+        }
     }
 
     #[test]

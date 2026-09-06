@@ -2588,3 +2588,50 @@ test("explicit display sleep is authenticated, delivered and acknowledged", asyn
   const offline = await json(await post(board, "/api/command", { ...id, cmd: "sleep_display" }));
   assert.equal(offline.status, 409);
 });
+
+test("board polling preserves the coin and only standby offers display sleep", () => {
+  class Node {
+    constructor(tag) { this.tag = tag; this.children = []; this.attrs = {}; }
+    appendChild(node) { return this.insertBefore(node, null); }
+    insertBefore(node, before) {
+      node.remove();
+      const index = before ? this.children.indexOf(before) : this.children.length;
+      this.children.splice(index, 0, node); node.parentNode = this; return node;
+    }
+    remove() {
+      if (this.parentNode) {
+        const nodes = this.parentNode.children;
+        nodes.splice(nodes.indexOf(this), 1); this.parentNode = null;
+      }
+    }
+    replaceChildren(...nodes) { for (const n of [...this.children]) n.remove(); nodes.forEach(n => this.appendChild(n)); }
+    setAttribute(key, value) { this.attrs[key] = value; }
+    addEventListener() {}
+    querySelector(selector) { return this.children.find(n => selector === ".device-coin" && n.className === "device-coin"); }
+  }
+  const list = new Node("div"), empty = new Node("div");
+  const document = {
+    createElement: tag => new Node(tag),
+    getElementById: id => id === "device-list" ? list : empty,
+    querySelector: () => ({ href: "https://example.com/assets/favicon.png" }),
+  };
+  const { src } = boardClientHelpers();
+  const render = new Function("document", `const zh = false, copy = {}, lastStatuses = [];
+    ${src.slice(src.indexOf("  function formatLastSeen"), src.indexOf("  let pendingByDevice"))}
+    return render;`)(document);
+  const devices = [{ device_id: "mac", display_name: "Mac" }];
+  const status = active => [{ device_id: "mac", online: true, active }];
+  render(devices, status(false), {});
+  const card = list.children[0], coin = card.querySelector(".device-coin");
+  render(devices, status(false), {});
+  assert.equal(list.children[0], card, "polling must preserve the card");
+  assert.equal(card.querySelector(".device-coin"), coin, "polling must preserve the decoded image");
+  const sleepButton = () => list.children[0].children.find(n => n.className === "device-actions").children.find(n => n.attrs["data-cmd"] === "sleep_display");
+  assert.equal(sleepButton().hidden, true, "sun mode hides Sleep Display Now");
+  render(devices, status(true), {});
+  assert.equal(card.querySelector(".device-coin"), coin);
+  assert.match(coin.src, /moon.png$/);
+  assert.equal(sleepButton().hidden, false);
+  render([], [], {});
+  assert.equal(list.children.length, 0);
+});

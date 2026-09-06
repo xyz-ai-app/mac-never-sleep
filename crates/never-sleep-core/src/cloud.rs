@@ -418,7 +418,7 @@ mod tests {
     }
 
     #[test]
-    fn remote_on_does_not_force_sleep_while_user_present() {
+    fn remote_on_sleeps_after_the_same_delay_as_app_start() {
         let mut eng = Engine::new(AppConfig::default());
         let mut h = host(0);
         h.hid_idle_ms = 500;
@@ -430,8 +430,8 @@ mod tests {
         h.continuous_ms = 1_500;
         let later = eng.handle(Input::Tick, &h);
         assert!(
-            !has_sleep(&later),
-            "remote on must not fight a person at the keyboard"
+            has_sleep(&later),
+            "explicit phone start must sleep the display like app start"
         );
         h.hid_idle_ms = 80_000;
         h.monotonic_ms = 50_000;

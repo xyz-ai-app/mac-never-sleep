@@ -344,7 +344,11 @@
   function render(devices, statuses, pending) {
     const list = document.getElementById("device-list");
     const empty = document.getElementById("board-empty");
-    list.replaceChildren();
+    const cards = new Map(Array.from(list.children, card => [card.deviceId, card]));
+    const deviceIds = new Set(devices.map(device => device.device_id));
+    for (const [id, card] of cards) {
+      if (!deviceIds.has(id)) card.remove();
+    }
     empty.hidden = devices.length > 0;
     const byId = new Map((statuses || []).map((d) => [d.device_id, d]));
     const prevById = new Map((lastStatuses || []).map((d) => [d.device_id, d]));
@@ -354,7 +358,13 @@
         byId.get(stored.device_id),
         prevById.get(stored.device_id),
       );
-      const card = el("article", "device-card" + (st.active ? " active" : "") + (st.online ? "" : " offline"));
+      const card = cards.get(stored.device_id) || el("article");
+      card.deviceId = stored.device_id;
+      card.className = "device-card" + (st.active ? " active" : "") + (st.online ? "" : " offline");
+      const existingCoin = card.querySelector(".device-coin");
+      for (const child of Array.from(card.children)) {
+        if (child !== existingCoin) child.remove();
+      }
       const power = st.on_ac
         ? copy.ac
         : `${copy.battery}${st.battery != null ? ` ${st.battery}%` : ""}`;
@@ -374,14 +384,15 @@
           st.online ? copy.online : copy.offline,
         ),
       );
-      card.appendChild(head);
-      const coin = el("img", "device-coin");
+      card.insertBefore(head, existingCoin || null);
+      const coin = existingCoin || el("img", "device-coin");
       const assets = document.querySelector('link[rel="icon"]').href.replace(/favicon\.png$/, "");
-      coin.src = assets + (st.active ? "moon.png" : "sun.png");
+      const coinSrc = assets + (st.active ? "moon.png" : "sun.png");
+      if (coin.src !== coinSrc) coin.src = coinSrc;
       coin.alt = "";
       coin.width = 104;
       coin.height = 104;
-      card.appendChild(coin);
+      if (!existingCoin) card.appendChild(coin);
       card.appendChild(el("h2", "device-status", st.active ? copy.standbyOn : copy.standbyOff));
 
 
@@ -434,6 +445,7 @@
       sleepBtn.type = "button";
       sleepBtn.setAttribute("data-cmd", "sleep_display");
       sleepBtn.disabled = !st.online || busy;
+      sleepBtn.hidden = !st.active;
       sleepBtn.addEventListener("click", () => sendCommand(stored, "sleep_display"));
       actions.appendChild(sleepBtn);
       card.appendChild(actions);
@@ -446,7 +458,10 @@
         );
       });
       card.appendChild(forget);
-      list.appendChild(card);
+      const position = devices.indexOf(stored);
+      if (list.children[position] !== card) {
+        list.insertBefore(card, list.children[position] || null);
+      }
     }
   }
 
