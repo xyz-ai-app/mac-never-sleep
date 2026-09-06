@@ -1,3 +1,4 @@
+import { LiveChannel, socketIdentity } from "./live.js";
 import {
   Board,
   capListEntries,
@@ -32,11 +33,31 @@ export class BoardHub {
     this.board = new Board();
     this.enqueue = createSerialQueue();
     this.alarmUnix = undefined;
+    this.live = new LiveChannel(ctx, () => this.#currentBoard(), () => this.#persist());
     ctx.blockConcurrencyWhile(async () => {
       this.stored = (await ctx.storage.get("board")) || null;
       this.board = Board.fromJSON(this.stored);
       await this.#scheduleAlarm();
     });
+  }
+
+  #currentBoard() {
+    this.board.nowSecs = () => Math.floor(Date.now() / 1000);
+    this.board.liveLastSeen = (id) => this.live.lastSeen(id);
+    return this.board;
+  }
+
+  webSocketMessage(ws, message) {
+    return this.enqueue(() => this.live.message(ws, message));
+  }
+
+  webSocketClose(ws) {
+    return this.enqueue(() => this.live.close(ws));
+  }
+
+  webSocketError(ws) {
+    ws.close(1011, "connection error");
+    return this.webSocketClose(ws);
   }
 
   fetch(request) {
@@ -48,13 +69,19 @@ export class BoardHub {
   }
 
   async #apply(request) {
-    this.board.nowSecs = () => Math.floor(Date.now() / 1000);
+    this.#currentBoard();
     const url = new URL(request.url);
     const path = url.pathname.replace(/\/+$/, "") || "/";
+    if (path === "/api/socket") return this.live.connect(request);
+    const offline = path === "/api/heartbeat" && (await request.clone().json().catch(() => ({}))).offline === true;
     const response = path.startsWith("/internal/")
       ? await handleInternal(this.board, request)
       : await handleApi(this.board, request);
     await this.#persist();
+    if (response.ok) {
+      if (offline) this.live.invalidateMacs();
+      if (["/api/heartbeat", "/api/command", "/api/pair/start"].includes(path)) this.live.publish();
+    }
     return response;
   }
 
@@ -63,6 +90,7 @@ export class BoardHub {
     this.board.nowSecs = () => Math.floor(Date.now() / 1000);
     this.board.expireOffers();
     await this.#persist();
+    this.live.publish();
   }
 
   async #persist() {
@@ -135,6 +163,18 @@ async function routeApi(request, env) {
   const url = new URL(request.url);
   const path = url.pathname.replace(/\/+$/, "") || "/";
   const origin = publicSiteOrigin(request.url, env);
+  if (path === "/api/socket") {
+    if (request.method !== "GET" || request.headers.get("Upgrade")?.toLowerCase() !== "websocket") return jsonResponse({ ok: false, error: "upgrade_required" }, 426);
+    const browserOrigin = request.headers.get("Origin");
+    if (browserOrigin && browserOrigin !== new URL(origin).origin) return jsonResponse({ ok: false, error: "bad_origin" }, 403);
+    const identity = socketIdentity(request);
+    if (!identity) return jsonResponse({ ok: false, error: "bad_identity" }, 400);
+    const gate = await deviceEntryGate(env, request, origin);
+    if (gate) return gate;
+    const headers = new Headers(request.headers);
+    headers.set("x-public-origin", origin);
+    return env.BOARD.get(env.BOARD.idFromName(`device:${identity.id}`)).fetch(new Request(request, { headers }));
+  }
   let body = {};
   try {
     body = await request.json();
@@ -310,30 +350,50 @@ async function routeApi(request, env) {
   if (path !== "/api/heartbeat" && path !== "/api/command") {
     return jsonResponse({ ok: false, error: "not_found" }, 404);
   }
-  const gated = await stubFetch(
-    env,
-    "rate:device",
-    "https://do/internal/device-rate",
-    { ip: clientIp(request) },
-    origin,
-  );
-  const gate = await gated.json().catch(() => ({}));
-  if (!gate.ok) {
-    return jsonResponse(
-      { ok: false, error: gate.error || "rate_limited" },
-      gate.status || 429,
-    );
-  }
   const name = shardName(path, body);
   if (!name) {
     return jsonResponse({ ok: false, error: "bad_identity" }, 400);
   }
+  const gate = await deviceEntryGate(env, request, origin);
+  if (gate) return gate;
   const res = await stubFetch(env, name, url.href, body, origin);
   if (path === "/api/heartbeat") {
     const json = await res.clone().json().catch(() => ({}));
     await dropPairShards(env, json.expired_codes, origin);
   }
   return res;
+}
+
+async function deviceEntryGate(env, request, origin) {
+  // Native edge limits avoid a second DO request on every heartbeat. These
+  // limits are per Cloudflare location; the device DO enforces its own budget.
+  if (env.DEVICE_IP_RATE && env.DEVICE_EDGE_RATE) {
+    const ipGate = await env.DEVICE_IP_RATE.limit({ key: clientIp(request) });
+    if (!ipGate.success) {
+      return jsonResponse({ ok: false, error: "rate_limited" }, 429);
+    }
+    const edgeGate = await env.DEVICE_EDGE_RATE.limit({ key: "device-api" });
+    if (!edgeGate.success) {
+      return jsonResponse({ ok: false, error: "rate_limited" }, 429);
+    }
+  } else {
+    // Older/custom deployments keep their existing protection until configured.
+    const gated = await stubFetch(
+      env,
+      "rate:device",
+      "https://do/internal/device-rate",
+      { ip: clientIp(request) },
+      origin,
+    );
+    const gate = await gated.json().catch(() => ({}));
+    if (!gate.ok) {
+      return jsonResponse(
+        { ok: false, error: gate.error || "rate_limited" },
+        gate.status || 429,
+      );
+    }
+  }
+  return null;
 }
 
 export default {

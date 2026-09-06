@@ -632,6 +632,7 @@ pub fn clear_handoff_ack() {
 pub fn human_ipc_error(code: &str, lang: Lang) -> String {
     match code {
         "" => Tr::new(lang).failed().to_string(),
+        "remote_disabled" => Tr::new(lang).remote_disabled().to_string(),
         "pairing_unavailable" => Tr::new(lang).pairing_unavailable().to_string(),
         other => other.to_string(),
     }
@@ -657,6 +658,23 @@ mod tests {
             screen_off_enabled: true,
             lid_awake_enabled: true,
         }
+    }
+
+    #[test]
+    fn remote_disabled_error_stays_machine_readable_and_has_localized_guidance() {
+        let response = IpcResponse::err("remote_disabled");
+        assert_eq!(
+            serde_json::to_value(response).unwrap()["error"],
+            "remote_disabled"
+        );
+        assert_eq!(
+            human_ipc_error("remote_disabled", Lang::En),
+            "Remote access is off. Enable it in Settings to pair your phone."
+        );
+        assert_eq!(
+            human_ipc_error("remote_disabled", Lang::Zh),
+            "远程访问已关闭。请在设置中开启后配对手机。"
+        );
     }
 
     #[test]

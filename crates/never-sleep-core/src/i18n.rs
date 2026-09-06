@@ -400,6 +400,17 @@ impl Tr {
         self.pick("Pairing code", "配对码")
     }
 
+    pub fn remote_access(self) -> &'static str {
+        self.pick("Remote access", "远程访问")
+    }
+
+    pub fn remote_disabled(self) -> &'static str {
+        self.pick(
+            "Remote access is off. Enable it in Settings to pair your phone.",
+            "远程访问已关闭。请在设置中开启后配对手机。",
+        )
+    }
+
     pub fn pairing_unavailable(self) -> &'static str {
         self.pick(
             "Pairing is not ready yet. Open Settings, or retry in a moment.",
@@ -961,6 +972,16 @@ mod tests {
             "Display asleep, Mac stays online"
         );
         assert_eq!(zh.panel_summary_active(), "屏幕已休眠，Mac 仍在线");
+        assert_eq!(en.remote_access(), "Remote access");
+        assert_eq!(zh.remote_access(), "远程访问");
+        assert_eq!(
+            en.remote_disabled(),
+            "Remote access is off. Enable it in Settings to pair your phone."
+        );
+        assert_eq!(
+            zh.remote_disabled(),
+            "远程访问已关闭。请在设置中开启后配对手机。"
+        );
         assert_eq!(en.more_settings(), "More Settings");
         assert_eq!(zh.more_settings(), "更多设置");
         assert_eq!(en.sleep_display_now_action(), "Sleep Display Now");

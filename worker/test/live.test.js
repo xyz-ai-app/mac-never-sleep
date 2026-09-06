@@ -1,0 +1,46 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { Board, handleApi } from "../src/board.js";
+const id = { device_id: "a".repeat(32), device_token: "b".repeat(64) };
+const req = (path, body) => new Request(`https://test${path}`, { method: "POST", body: JSON.stringify(body) });
+test("live presence keeps an unchanged Mac reachable without writing heartbeats", async () => {
+  let now = 1000;
+  const board = new Board(() => now);
+  await handleApi(board, req("/api/pair/start", id));
+  await handleApi(board, req("/api/heartbeat", { ...id, status: { active: true, elapsed_secs: 1, remaining_secs: 120 } }));
+  const saved = board.toJSON();
+  board.liveLastSeen = () => now;
+  now += 60;
+  const listed = board.list([id]).devices[0];
+  assert.equal(listed.online, true);
+  assert.equal(listed.elapsed_secs, 61);
+  assert.equal(listed.remaining_secs, 60);
+  assert.deepEqual(board.toJSON(), saved, "presence queries must not write a new lastSeen");
+  assert.equal(board.command({ deviceId: id.device_id, deviceToken: id.device_token, cmd: "off" }).ok, true);
+});
+
+test("live auto-response timestamps survive reconstruction and presence does not persist", async () => {
+  const { LiveChannel } = await import("../src/live.js");
+  globalThis.WebSocketRequestResponsePair = class { constructor(request, response) { this.request = request; this.response = response; } };
+  const now = Math.floor(Date.now() / 1000);
+  const board = new Board(() => now);
+  await handleApi(board, req("/api/pair/start", id));
+  await handleApi(board, req("/api/heartbeat", { ...id, status: { active: true } }));
+  const socket = (role, seen) => ({ readyState: 1, attachment: { role, id: id.device_id, token: id.device_token, ready: role === "mac", seen }, deserializeAttachment() { return this.attachment; }, serializeAttachment(a) { this.attachment = a; }, send() {}, close() { this.readyState = 3; } });
+  board.devices.get(id.device_id).lastSeen = now - 200;
+  const mac = socket("mac", now - 200);
+  const viewer = socket("viewer", now);
+  let writes = 0;
+  const ctx = { setWebSocketAutoResponse() {}, getWebSockets: () => [mac, viewer], getWebSocketAutoResponseTimestamp: ws => ws === mac ? new Date(now * 1000) : null };
+  const channel = new LiveChannel(ctx, () => board, async () => { writes++; });
+  assert.equal(channel.lastSeen(id.device_id), now);
+  await channel.message(viewer, JSON.stringify({ type: "presence" }));
+  assert.equal(writes, 0);
+  const reconstructed = new LiveChannel(ctx, () => board, async () => { writes++; });
+  assert.equal(reconstructed.lastSeen(id.device_id), now);
+  await reconstructed.close(mac);
+  assert.equal(board.devices.get(id.device_id).lastSeen, now, "close preserves the last automatic ping for reconnect grace");
+  mac.attachment.ready = true;
+  board.devices.get(id.device_id).token = "f".repeat(64);
+  assert.equal(reconstructed.lastSeen(id.device_id), null, "an old socket cannot authenticate as a replacement device");
+});

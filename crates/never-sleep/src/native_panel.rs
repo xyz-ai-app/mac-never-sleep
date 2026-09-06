@@ -47,6 +47,7 @@ const TAG_SCREEN_OFF: isize = 3;
 const TAG_LID: isize = 4;
 const TAG_LOCK: isize = 5;
 const TAG_LOGIN: isize = 6;
+const TAG_REMOTE: isize = 7;
 
 struct PanelIvars {
     proxy: EventLoopProxy<UserEvent>,
@@ -131,6 +132,7 @@ define_class!(
                 TAG_LID => "lid_awake",
                 TAG_LOCK => "lock_screen",
                 TAG_LOGIN => "launch_at_login",
+                TAG_REMOTE => "remote_enabled",
                 _ => return,
             };
             self.emit(UiCommand::SetOption {
@@ -267,6 +269,9 @@ pub struct NativePanel {
     battery_settings: Retained<NSSwitch>,
     login_label: Retained<NSTextField>,
     login: Retained<NSSwitch>,
+    remote_label: Retained<NSTextField>,
+    remote: Retained<NSSwitch>,
+    remote_enabled: bool,
     quick_duration: Retained<NSPopUpButton>,
     quick_duration_label: Retained<NSTextField>,
     quick_screen: Retained<NSSwitch>,
@@ -275,6 +280,7 @@ pub struct NativePanel {
     status_stack: Retained<NSStackView>,
     sleep_host: Retained<NSView>,
     phone_main: Retained<NSButton>,
+    phone_main_row: Retained<NSStackView>,
     phone_settings: Retained<NSButton>,
     pairing_view: Retained<NSView>,
     pairing_open: bool,
@@ -473,12 +479,13 @@ impl NativePanel {
         let (quick_screen_label, quick_screen, quick_screen_row) =
             labeled_switch(&target, TAG_SCREEN_OFF, mtm);
         let phone_main = text_button(&target, sel!(phoneBoard:), mtm);
+        let phone_main_row = navigation_row(&phone_main, mtm);
         let quick_card = grouped_card(
             mtm,
             &[
                 duration_row(&quick_duration_label, quick_duration.as_ref(), mtm),
                 quick_screen_row,
-                navigation_row(&phone_main, mtm),
+                phone_main_row.clone(),
             ],
         );
         let footer = chrome_bar(&more, None, Some(&quit_main), mtm);
@@ -529,6 +536,8 @@ impl NativePanel {
         pairing_value.setAlignment(NSTextAlignment::Center);
         pairing_value.setFont(Some(&tabular_font(22.0)));
         let phone_settings = text_button(&target, sel!(phoneBoard:), mtm);
+        let (remote_label, remote, remote_row) = labeled_switch(&target, TAG_REMOTE, mtm);
+        remote_row.insertArrangedSubview_atIndex(nv(&*phone_settings), 1);
         let settings_card = grouped_card(
             mtm,
             &[
@@ -539,7 +548,7 @@ impl NativePanel {
                 lock_row,
                 battery_settings_row,
                 login_row,
-                navigation_row(&phone_settings, mtm),
+                remote_row,
             ],
         );
         let pairing_qr = NSImageView::new(mtm);
@@ -747,6 +756,9 @@ impl NativePanel {
             battery_settings,
             login_label,
             login,
+            remote_label,
+            remote,
+            remote_enabled: false,
             quick_duration,
             quick_duration_label,
             quick_screen,
@@ -755,6 +767,7 @@ impl NativePanel {
             status_stack: status,
             sleep_host,
             phone_main,
+            phone_main_row,
             phone_settings,
             pairing_view,
             pairing_open: false,
@@ -845,7 +858,25 @@ impl NativePanel {
         });
         let phone_title = format!("{}  ›", state.pairing_label);
         self.phone_main.setTitle(&ns(&phone_title));
-        self.phone_settings.setTitle(&ns(&phone_title));
+        self.remote_enabled = state.remote_enabled;
+        self.phone_main_row.setHidden(!state.remote_enabled);
+        self.phone_settings.setHidden(!state.remote_enabled);
+        self.phone_settings
+            .setTitle(&ns(if state.lang == never_sleep_core::Lang::Zh {
+                "配对 ›"
+            } else {
+                "Pair ›"
+            }));
+        set_switch_row(
+            &self.remote_label,
+            &self.remote,
+            &state.remote_label,
+            state.remote_enabled,
+        );
+        if !state.remote_enabled && self.pairing_open {
+            self.pairing_open = false;
+            self.apply_view();
+        }
         set_text(&self.pairing_title, &state.pairing_label);
         self.pairing_back.setToolTip(Some(&ns(&state.back)));
         set_text(&self.duration_label, &state.duration_label);
@@ -1025,6 +1056,9 @@ impl NativePanel {
     }
 
     pub fn show_pairing(&mut self) {
+        if !self.remote_enabled {
+            return;
+        }
         self.pairing_open = true;
         self.apply_view();
     }

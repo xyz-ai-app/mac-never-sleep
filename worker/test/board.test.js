@@ -1286,7 +1286,7 @@ test("partial list polls keep cached statuses for missing Macs", () => {
     "a Mac omitted from the current /list must not stay Online",
   );
   assert.equal(merged.find((d) => d.device_id === "good").online, undefined);
-  assert.match(src, /lastStatuses = mergeListStatuses/);
+  assert.match(src, /const fallback = mergeListStatuses/);
 });
 
 test("beginClaim reuses an in-flight request and restores the pairing button", async () => {
@@ -2104,11 +2104,11 @@ test("list fan-out is rate-limited before selecting shards", () => {
   );
 });
 
-test("list global rate limit covers aggregate 2.5s board polling", () => {
+test("list global rate limit retains headroom for legacy polling", () => {
   const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "../..");
   const client = fs.readFileSync(path.join(root, "site/assets/board.js"), "utf8");
-  const pollMs = Number(/setInterval\(refresh,\s*(\d+)\)/.exec(client)?.[1]);
-  assert.equal(pollMs, 2500, "open boards poll this often");
+  const pollMs = 2500; // Old boards still poll during a rolling upgrade.
+  assert.ok(client.includes("fallbackAt < 30000"), "new boards use a slow fallback");
   const pollsPerBoardPerMin = Math.ceil(60_000 / pollMs);
   assert.ok(
     LIST_IP_LIMIT >= pollsPerBoardPerMin,
@@ -2212,7 +2212,7 @@ test("device routes are rate-limited before opening shards", () => {
   const index = fs.readFileSync(path.join(root, "worker/src/index.js"), "utf8");
   const board = fs.readFileSync(path.join(root, "worker/src/board.js"), "utf8");
   const afterBusy = index.indexOf('started.error || "pair_busy"');
-  const lastShard = index.lastIndexOf("const name = shardName(path, body);");
+  const lastShard = index.lastIndexOf("const res = await stubFetch(env, name");
   assert.ok(afterBusy >= 0 && lastShard > afterBusy);
   const region = index.slice(afterBusy, lastShard);
   assert.ok(
@@ -2220,21 +2220,21 @@ test("device routes are rate-limited before opening shards", () => {
     "only heartbeat and command may reach the device catch-all",
   );
   const notFoundAt = region.indexOf("not_found");
-  const rateAt = region.indexOf("rate:device");
+  const rateAt = region.indexOf("await deviceEntryGate");
   assert.ok(
     notFoundAt >= 0,
     "unknown /api paths must 404 before opening a device shard",
   );
-  assert.ok(rateAt >= 0, "heartbeat/command must hit rate:device");
+  assert.ok(rateAt >= 0, "legacy deployments must retain rate:device as fallback");
   assert.ok(
     notFoundAt < rateAt,
     "unknown /api paths must 404 before the rate shard",
   );
-  assert.ok(region.includes("internal/device-rate"));
+  assert.ok(index.includes("internal/device-rate"));
   assert.match(board, /export function takeDeviceSlot/);
 });
 
-test("device rate limit covers the active one-second panel clock", () => {
+test("legacy rate limit still covers old one-second clients", () => {
   const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "../..");
   const panel = fs.readFileSync(
     path.join(root, "crates/never-sleep/src/panel.rs"),
@@ -2244,7 +2244,7 @@ test("device rate limit covers the active one-second panel clock", () => {
   assert.equal(
     DEVICE_HEARTBEAT_INTERVAL_MS,
     1000,
-    "device caps must follow the active panel clock, not idle HEARTBEAT_MS",
+    "rolling upgrades must allow the old panel-driven heartbeat rate",
   );
   const beatsPerMacPerMin = Math.ceil(60_000 / DEVICE_HEARTBEAT_INTERVAL_MS);
   assert.ok(

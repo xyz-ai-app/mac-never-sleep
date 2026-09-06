@@ -1,3 +1,5 @@
+import { BoardConnections, mergeViews } from "./board-live.js";
+
 (() => {
   const STORAGE_KEY = "never-sleep-devices";
   const LIST_MAX_DEVICES = 32;
@@ -470,6 +472,20 @@
   let refreshGen = 0;
   let refreshInFlight = null;
   let refreshQueued = false;
+  let fallbackAt = -Infinity;
+  const live = new BoardConnections(new URL(apiBase(), location.origin).href, devices => {
+    refreshGen = nextRefreshGeneration(refreshGen);
+    lastStatuses = mergeViews(lastStatuses, devices.map(d => ({ ...d, received_ms: Date.now() })));
+    render(loadDevices(), localStatuses(), pendingByDevice);
+  });
+
+  function localStatuses() {
+    return lastStatuses.map(status => {
+      const delta = Math.max(0, Math.floor((Date.now() - (status.received_ms || Date.now())) / 1000));
+      return { ...status, online: status.online && delta <= 35,
+        remaining_secs: status.active && status.remaining_secs != null ? Math.max(0, status.remaining_secs - delta) : status.remaining_secs };
+    });
+  }
 
   function showError(message) {
     const elErr = document.getElementById("board-error");
@@ -483,25 +499,37 @@
   }
 
   async function runRefresh() {
-    const devices = loadDevices();
+    const allDevices = loadDevices();
+    live.update(allDevices, !document.hidden);
+    if (document.hidden) return;
+    render(allDevices, localStatuses(), pendingByDevice);
+    const devices = live.missing(allDevices);
     if (!devices.length) {
       refreshGen = nextRefreshGeneration(refreshGen);
-      render([], lastStatuses, pendingByDevice);
       return;
     }
+    if (Date.now() - fallbackAt < 30000) return;
+    fallbackAt = Date.now();
     const started = (refreshGen = nextRefreshGeneration(refreshGen));
+    const failFallback = () => {
+      const ids = new Set(devices.map(d => d.device_id));
+      lastStatuses = mergeViews(lastStatuses, withListFailure(lastStatuses.filter(d => ids.has(d.device_id))));
+      render(allDevices, localStatuses(), pendingByDevice);
+    };
     try {
       const { res, json } = await post("/list", { devices });
       if (!isCurrentRefresh(started, refreshGen)) return;
       if (!res.ok || !Array.isArray(json.devices)) {
-        render(devices, withListFailure(lastStatuses), pendingByDevice);
+        failFallback();
         return;
       }
-      lastStatuses = mergeListStatuses(lastStatuses, json.devices);
-      render(devices, lastStatuses, pendingByDevice);
+      const missingIds = new Set(devices.map(d => d.device_id));
+      const fallback = mergeListStatuses(lastStatuses.filter(d => missingIds.has(d.device_id)), json.devices);
+      lastStatuses = mergeViews(lastStatuses, fallback.map(d => ({ ...d, received_ms: Date.now() })));
+      render(allDevices, localStatuses(), pendingByDevice);
     } catch {
       if (!isCurrentRefresh(started, refreshGen)) return;
-      render(devices, withListFailure(lastStatuses), pendingByDevice);
+      failFallback();
     }
   }
 
@@ -643,5 +671,9 @@
   } else {
     refresh();
   }
-  window.setInterval(refresh, 2500);
+  // This timer updates local clocks and manages sockets. HTTP fallback is 30s.
+  window.setInterval(refresh, 1000);
+  document.addEventListener("visibilitychange", () => { fallbackAt = -Infinity; refresh(); });
+  window.addEventListener("storage", () => { fallbackAt = -Infinity; refresh(); });
+  window.addEventListener("pagehide", () => live.update([], false));
 })();

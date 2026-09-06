@@ -19,10 +19,7 @@ use tray_icon::{
 };
 
 use crate::apply::{dispatch, stop_for_quit};
-use crate::cloud::{
-    cloud_enabled, default_display_name, load_or_create_identity, spawn_reporter_paused,
-    CloudHandle,
-};
+use crate::cloud::CloudHandle;
 use crate::icon::tray_icon;
 use crate::ipc::{self, IpcIncoming};
 use crate::panel::{
@@ -232,6 +229,7 @@ struct MenuHandles {
     lock_screen: CheckMenuItem,
     battery_floor: CheckMenuItem,
     login: CheckMenuItem,
+    remote: CheckMenuItem,
     lang_en: CheckMenuItem,
     lang_zh: CheckMenuItem,
     show_window: MenuItem,
@@ -319,31 +317,15 @@ pub fn run() {
     let mut pending_stop = false;
     let mut last_handoff_id: Option<String> = None;
     let mut pairing: Option<(String, String, u64)> = None;
-    let cloud_identity = if cloud_enabled() {
-        match load_or_create_identity() {
-            Ok(id) => Some(id),
-            Err(err) => {
-                eprintln!("never-sleep cloud identity: {err}");
-                None
-            }
-        }
-    } else {
-        None
-    };
-    let mut cloud = if ipc_owned {
-        cloud_identity.as_ref().map(|identity| {
-            spawn_reporter_paused(
-                identity.clone(),
-                default_display_name(),
-                engine.config.lang(),
-                crate::session_lock::should_pause_menu_reporter(
-                    crate::session_lock::peer_reporter_lock_is_live(std::process::id()),
-                ),
-            )
-        })
-    } else {
-        None
-    };
+    let mut cloud_identity = None;
+    let mut cloud = None;
+    crate::cloud::reconcile_remote(
+        &engine.config,
+        ipc_owned,
+        &mut cloud,
+        &mut cloud_identity,
+        &mut pairing,
+    );
 
     event_loop.run(move |event, _, control_flow| {
         *control_flow = ControlFlow::WaitUntil(next_wake);
@@ -421,7 +403,9 @@ pub fn run() {
                     &mut engine,
                     platform.as_mut(),
                     &mut next_wake,
-                    cloud.as_ref(),
+                    &mut cloud,
+                    &mut cloud_identity,
+                    ipc_owned,
                     &mut pairing,
                 );
             }
@@ -456,7 +440,9 @@ pub fn run() {
                     &mut engine,
                     platform.as_mut(),
                     &mut next_wake,
-                    cloud.as_ref(),
+                    &mut cloud,
+                    &mut cloud_identity,
+                    ipc_owned,
                     &mut pairing,
                 );
             }
@@ -475,7 +461,9 @@ pub fn run() {
                     &mut engine,
                     platform.as_mut(),
                     &mut next_wake,
-                    cloud.as_ref(),
+                    &mut cloud,
+                    &mut cloud_identity,
+                    ipc_owned,
                     &mut pairing,
                 );
             }
@@ -516,7 +504,9 @@ pub fn run() {
                         &mut engine,
                         platform.as_mut(),
                         &mut next_wake,
-                        cloud.as_ref(),
+                        &mut cloud,
+                        &mut cloud_identity,
+                        ipc_owned,
                         &mut pairing,
                     );
                 }
@@ -546,7 +536,9 @@ pub fn run() {
                     &mut engine,
                     platform.as_mut(),
                     &mut next_wake,
-                    cloud.as_ref(),
+                    &mut cloud,
+                    &mut cloud_identity,
+                    ipc_owned,
                     &mut pairing,
                 );
             }
@@ -559,7 +551,9 @@ pub fn run() {
                     &mut engine,
                     platform.as_mut(),
                     &mut next_wake,
-                    cloud.as_ref(),
+                    &mut cloud,
+                    &mut cloud_identity,
+                    ipc_owned,
                     &mut pairing,
                 );
                 if let Some(panel) = popover.as_mut() {
@@ -609,7 +603,9 @@ pub fn run() {
                         &mut engine,
                         platform.as_mut(),
                         &mut next_wake,
-                        cloud.as_ref(),
+                        &mut cloud,
+                        &mut cloud_identity,
+                        ipc_owned,
                         &mut pairing,
                     );
                 }
@@ -722,6 +718,7 @@ fn build_menu(menu: &Menu, cfg: &AppConfig) -> MenuHandles {
         cfg.battery_floor_percent.is_some(),
         None,
     );
+    let remote = CheckMenuItem::new(t.remote_access(), true, cfg.remote_enabled, None);
     let login = CheckMenuItem::new(t.launch_at_login(), true, cfg.launch_at_login, None);
     let lang_en = CheckMenuItem::new(t.language_english(), true, cfg.lang() == Lang::En, None);
     let lang_zh = CheckMenuItem::new(t.language_chinese(), true, cfg.lang() == Lang::Zh, None);
@@ -749,6 +746,7 @@ fn build_menu(menu: &Menu, cfg: &AppConfig) -> MenuHandles {
         &battery_floor,
         &PredefinedMenuItem::separator(),
         &login,
+        &remote,
         &lang_root,
         &settings,
         &help,
@@ -772,6 +770,7 @@ fn build_menu(menu: &Menu, cfg: &AppConfig) -> MenuHandles {
         lock_screen,
         battery_floor,
         login,
+        remote,
         lang_en,
         lang_zh,
         show_window,
@@ -798,6 +797,7 @@ fn apply_static_labels(handles: &MenuHandles, lang: Lang) {
     handles
         .battery_floor
         .set_text(t.battery_floor_on(DEFAULT_BATTERY_FLOOR));
+    handles.remote.set_text(t.remote_access());
     handles.login.set_text(t.launch_at_login());
     handles.lang_root.set_text(t.language_menu());
     handles.show_window.set_text(t.show_window());
@@ -815,10 +815,13 @@ fn refresh_ui(
     engine: &mut Engine,
     platform: &mut dyn Platform,
     next_wake: &mut Instant,
-    cloud: Option<&CloudHandle>,
+    cloud: &mut Option<CloudHandle>,
+    cloud_identity: &mut Option<never_sleep_core::CloudIdentity>,
+    ipc_owned: bool,
     pairing: &mut Option<(String, String, u64)>,
 ) {
-    if let Some(handle) = cloud {
+    crate::cloud::reconcile_remote(&engine.config, ipc_owned, cloud, cloud_identity, pairing);
+    if let Some(handle) = cloud.as_ref() {
         crate::cloud::sync_cloud(engine, platform, handle, pairing);
         if crate::session_lock::should_resume_paused_menu_reporter(
             handle.is_paused(),
@@ -849,6 +852,7 @@ fn refresh_ui(
     handles.lid_awake.set_checked(vm.keep_awake_on_lid_close);
     handles.resleep.set_checked(vm.resleep_display);
     handles.lock_screen.set_checked(vm.lock_screen);
+    handles.remote.set_checked(engine.config.remote_enabled);
     handles.login.set_checked(vm.launch_at_login);
     handles
         .battery_floor
@@ -992,6 +996,9 @@ fn handle_menu_event(
             Some(DEFAULT_BATTERY_FLOOR)
         };
         save_config(&engine.config);
+    } else if id == handles.remote.id() {
+        engine.config.remote_enabled = !engine.config.remote_enabled;
+        save_config(&engine.config);
     } else if id == handles.login.id() {
         engine.config.launch_at_login = !engine.config.launch_at_login;
         if let Err(e) = platform.set_launch_at_login(engine.config.launch_at_login) {
@@ -1053,6 +1060,7 @@ fn handle_ui_command(
         }
         UiCommand::SetOption { key, enabled } => {
             match key.as_str() {
+                "remote_enabled" => engine.config.remote_enabled = enabled,
                 "screen_off" => engine.config.screen_off = enabled,
                 "lid_awake" => engine.config.keep_awake_on_lid_close = enabled,
                 "resleep_display" => engine.config.resleep_display = enabled,
@@ -1096,11 +1104,12 @@ fn handle_ui_command(
                 panel.ui.show_settings();
             }
         }
-        UiCommand::PhoneBoard => {
+        UiCommand::PhoneBoard if engine.config.remote_enabled => {
             if let Some(panel) = popover {
                 panel.ui.show_pairing();
             }
         }
+        UiCommand::PhoneBoard => {}
         UiCommand::Back => {
             if let Some(panel) = popover {
                 panel.ui.go_back();
@@ -1155,6 +1164,7 @@ fn handle_ipc(
     let mut resp = match req {
         IpcRequest::Ping => IpcResponse::pong(),
         IpcRequest::Status => IpcResponse::ok_status(host_status(engine, platform)),
+        IpcRequest::Pair if !engine.config.remote_enabled => IpcResponse::err("remote_disabled"),
         IpcRequest::Pair => match pairing.as_ref() {
             Some((code, url, _)) => IpcResponse::ok_pairing(
                 code.clone(),

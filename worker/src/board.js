@@ -3,7 +3,7 @@
 //! The Durable Object wrapper lives in `index.js`. This module is the policy
 //! the tests lock — no Cloudflare runtime required.
 
-export const HEARTBEAT_TTL_SECS = 15;
+export const HEARTBEAT_TTL_SECS = 35;
 export const PAIRING_TTL_SECS = 10 * 60;
 export const PAIRING_CODE_LEN = 8;
 const CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
@@ -128,7 +128,7 @@ export const PAIR_START_IP_WINDOW_SECS = 60;
 export const PAIR_START_GLOBAL_LIMIT = 60;
 export const PAIR_START_GLOBAL_WINDOW_SECS = 60;
 export const LIST_IP_WINDOW_SECS = 60;
-/** Must match `setInterval(refresh, …)` in site/assets/board.js. */
+/** Legacy boards still poll at this rate during a rolling upgrade. */
 export const LIST_POLL_INTERVAL_MS = 2500;
 /** Concurrent open boards one household/corporate NAT is sized to survive. */
 export const LIST_IP_MIN_BOARDS = 8;
@@ -143,7 +143,7 @@ export const PAIR_CLAIM_IP_LIMIT = 20;
 export const PAIR_CLAIM_IP_WINDOW_SECS = 60;
 export const PAIR_CLAIM_GLOBAL_LIMIT = 180;
 export const PAIR_CLAIM_GLOBAL_WINDOW_SECS = 60;
-/** Must match `PANEL_TICK_ACTIVE_MS` while Screen-Off Standby is running. */
+/** Legacy clients still send on the one-second panel clock; retain headroom. */
 export const DEVICE_HEARTBEAT_INTERVAL_MS = 1000;
 export const DEVICE_IP_MIN_MACS = 8;
 const DEVICE_BEATS_PER_MAC_PER_MIN = Math.ceil(
@@ -172,6 +172,14 @@ function bucketTake(bucket, nowSecs, windowSecs, limit) {
     return { ok: false, bucket: { count: bucket.count, windowStart: start } };
   }
   return { ok: true, bucket: { count, windowStart: start } };
+}
+
+// Shared across heartbeat and commands, including across IPs and DO reloads.
+// Leave room for old one-second clients during a rolling upgrade.
+function takeAuthenticatedDeviceSlot(device, now) {
+  const result = bucketTake(device.requestRate, now, 60, 120);
+  if (result.ok) device.requestRate = result.bucket;
+  return result.ok;
 }
 
 function pruneExpiredIpBuckets(ips, nowSecs, windowSecs) {
@@ -259,7 +267,7 @@ export function clientIp(request) {
 
 export const PAIR_RESERVE_ATTEMPTS = 8;
 /** Drop undelivered commands after a few missed heartbeats, not hours later. */
-export const COMMAND_TTL_SECS = HEARTBEAT_TTL_SECS * 4;
+export const COMMAND_TTL_SECS = 60;
 const U32_MAX = 0xffffffff;
 /** `JsonStatus` counters are `Option<u64>`; JSON numbers stay exact through 2^53-1. */
 const MAX_STATUS_SECS = Number.MAX_SAFE_INTEGER;
@@ -854,9 +862,14 @@ export class Board {
     if (!device || !tokensMatch(device.token, deviceToken)) {
       return { ok: false, error: "unauthorized", status: 401 };
     }
+    // Offline flushes must work even after the normal budget is exhausted.
+    if (offline !== true && !takeAuthenticatedDeviceSlot(device, now)) {
+      return { ok: false, error: "rate_limited", status: 429 };
+    }
     if (displayName) device.displayName = boundDisplayName(displayName);
     if (status && typeof status === "object") {
       device.status = sanitizeStatus(status);
+      device.statusAt = now;
     }
     if (offline === true) {
       device.lastSeen = now - HEARTBEAT_TTL_SECS - 1;
@@ -903,6 +916,11 @@ export class Board {
     };
   }
 
+  effectiveLastSeen(deviceId, device) {
+    const live = this.liveLastSeen?.(deviceId);
+    return live == null ? device.lastSeen : Math.max(device.lastSeen || 0, live);
+  }
+
   list(entriesIn) {
     if (!Array.isArray(entriesIn)) {
       return { ok: false, error: "bad_request", status: 400 };
@@ -916,14 +934,22 @@ export class Board {
       if (!device || !tokensMatch(device.token, token)) {
         continue;
       }
-      const online =
-        device.lastSeen != null && deviceIsOnline(device.lastSeen, now);
+      const lastSeen = this.effectiveLastSeen(deviceId, device);
+      const online = lastSeen != null && deviceIsOnline(lastSeen, now);
+      const status = sanitizeStatus(device.status);
+      // A live connection reports changes, not ticking counters. Extrapolate
+      // from the last full sample without mutating or persisting the sample.
+      if (online && status.active && typeof device.statusAt === "number") {
+        const delta = Math.max(0, now - device.statusAt);
+        if (status.elapsed_secs != null) status.elapsed_secs += delta;
+        if (status.remaining_secs != null) status.remaining_secs = Math.max(0, status.remaining_secs - delta);
+      }
       devices.push({
         device_id: deviceId,
         display_name: device.displayName,
         online,
-        last_seen_unix: device.lastSeen,
-        ...sanitizeStatus(device.status),
+        last_seen_unix: lastSeen,
+        ...status,
       });
     }
     return { ok: true, devices, status: 200 };
@@ -935,11 +961,14 @@ export class Board {
     if (!device || !tokensMatch(device.token, deviceToken)) {
       return { ok: false, error: "unauthorized", status: 401 };
     }
+    if (!takeAuthenticatedDeviceSlot(device, now)) {
+      return { ok: false, error: "rate_limited", status: 429 };
+    }
     if (cmd !== "on" && cmd !== "off" && cmd !== "sleep_display") {
       return { ok: false, error: "bad_cmd", status: 400 };
     }
-    const online =
-      device.lastSeen != null && deviceIsOnline(device.lastSeen, now);
+    const lastSeen = this.effectiveLastSeen(deviceId, device);
+    const online = lastSeen != null && deviceIsOnline(lastSeen, now);
     if (!online) {
       return { ok: false, error: "offline", accepted: false, status: 409 };
     }

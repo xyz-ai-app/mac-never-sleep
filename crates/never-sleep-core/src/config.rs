@@ -18,6 +18,9 @@ pub struct AppConfig {
     pub battery_floor_percent: Option<u8>,
     /// 登录时自动打开菜单栏
     pub launch_at_login: bool,
+    /// Remote access is explicitly opt-in, including configurations from older versions.
+    #[serde(default)]
+    pub remote_enabled: bool,
     /// 关屏同时锁屏幕。默认关：GUI 远程操控（ChatGPT/Codex）需要解锁会话。
     pub lock_screen: bool,
     /// 首次点击「开始」后延迟关屏，好让通知/菜单能被看见
@@ -41,6 +44,7 @@ impl Default for AppConfig {
             resleep_display: true,
             battery_floor_percent: Some(DEFAULT_BATTERY_FLOOR),
             launch_at_login: false,
+            remote_enabled: false,
             lock_screen: false,
             display_off_delay_ms: DEFAULT_DISPLAY_OFF_DELAY_MS,
             user_idle_resleep_ms: DEFAULT_USER_IDLE_RESLEEP_MS,
@@ -151,6 +155,24 @@ fn parse_until(raw: &str, t: Tr) -> Result<DurationPref, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn remote_access_requires_explicit_persisted_opt_in() {
+        let mut value = serde_json::to_value(AppConfig::default()).unwrap();
+        assert_eq!(value["remote_enabled"], false);
+        value.as_object_mut().unwrap().remove("remote_enabled");
+        let legacy: AppConfig = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(
+            serde_json::to_value(legacy).unwrap()["remote_enabled"],
+            false
+        );
+        value["remote_enabled"] = true.into();
+        let enabled: AppConfig = serde_json::from_value(value).unwrap();
+        assert_eq!(
+            serde_json::to_value(enabled).unwrap()["remote_enabled"],
+            true
+        );
+    }
 
     #[test]
     fn parse_duration_variants() {

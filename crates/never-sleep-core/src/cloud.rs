@@ -12,7 +12,7 @@ use crate::{parse_duration_pref, Engine, HostSnapshot, Input, StopReason};
 /// Public origin after the gateway prefix. Phone pages and Mac heartbeats share it.
 pub const PUBLIC_SITE_ORIGIN: &str = "https://xyz-ai.app/never-sleep";
 /// A Mac is online only if a heartbeat landed within this many seconds.
-pub const HEARTBEAT_TTL_SECS: u64 = 15;
+pub const HEARTBEAT_TTL_SECS: u64 = 35;
 pub const PAIRING_TTL_SECS: u64 = 10 * 60;
 pub const PAIRING_CODE_LEN: usize = 8;
 pub const DEVICE_ID_HEX_LEN: usize = 32;
@@ -352,7 +352,9 @@ mod tests {
     fn heartbeat_ttl_marks_stale_devices_offline() {
         assert!(device_is_online(100, 100));
         assert!(device_is_online(100, 115));
-        assert!(!device_is_online(100, 116));
+        assert!(device_is_online(100, 130));
+        assert!(device_is_online(100, 135));
+        assert!(!device_is_online(100, 136));
         assert!(!device_is_online(100, 200));
     }
 

@@ -116,12 +116,22 @@ JSON output stays English so agents have a stable contract.
 
 Watch every paired Mac from your phone, and start or end Screen-Off Standby remotely. Open **[the phone board](https://xyz-ai.app/never-sleep/board/)**.
 
-1. On the Mac, open **More Settings**. The **Phone board** row shows a short pairing code. (Or run `never-sleep pair`.)
+Remote access is off by default, including upgrades from configurations without this setting. While off, the client runs locally: it creates no remote identity, opens no cloud connection, sends no heartbeat, and hides pairing codes and QR codes. Local standby, shortcuts, and CLI commands still work.
+
+1. On the Mac, open **More Settings**, enable **Remote access**, then click **Pair** on that row to see the QR code and pairing code. (Once enabled, you can also run `never-sleep pair`.)
 2. On your phone, enter that code — or open the pairing URL the app prints. One browser can watch several Macs.
 3. The list is live: online/offline (recent heartbeat), standby on/off, display asleep vs awake, lid, AC vs battery %, remaining time, and the machine name.
 4. **Start Screen-Off Standby** and **End Standby** apply to the Mac you tap, not the whole list. The phone authenticates with that machine’s pairing token. The Mac runs the same local `on` / `off` Engine path as the menu bar (no Energy Saver rewrite).
 5. If the Mac is offline, the board reports that the command did not apply. It will not fake a status change. Remote start still will not force-sleep the display while someone is at the keyboard.
-6. **Sleep Display Now** explicitly turns off the display, even after recent keyboard/mouse activity and even when standby is off. It does not start/end standby or reset its timer. Delivery uses the heartbeat and may take a few seconds; both the Mac app and Worker need this update. Remote start may defer automatic display sleep when recent input is detected.
+6. **Sleep Display Now** explicitly turns off the display, even after recent keyboard/mouse activity and even when standby is off. It does not start/end standby or reset its timer. Commands are pushed over the live connection; HTTP fallback may take up to about 10 seconds plus network latency; both the Mac app and Worker need this update. Remote start may defer automatic display sleep when recent input is detected.
+
+The switch persists as `remote_enabled` in `config.toml`. Turning it off disconnects the transport without a final heartbeat; an already in-flight request may take a moment to finish, and the phone shows offline within about 35 seconds. Saved pairing credentials remain available for re-enabling remote access. While disabled, `never-sleep pair --json` returns `remote_disabled` and never enables networking automatically.
+
+The Mac prefers an authenticated WebSocket connection. Status changes are sent immediately (coalesced to at most once a second), with a full resync every five minutes. Lightweight keepalives run every 10 seconds and are answered by Cloudflare without waking the Durable Object or writing storage. Commands are pushed immediately, retained until acknowledged, and expire after 60 seconds. The connection uses the Durable Objects Hibernation API so idle connections do not keep the object running.
+
+The phone subscribes only while the page is visible. Each visible device gets a connection; a read-only presence check every 20 seconds detects stale Macs without writing a heartbeat. Countdown text is computed locally. If WebSockets are unavailable, the Mac falls back to a 10-second HTTP heartbeat and the phone to 30-second list polling; reconnection attempts back off to five minutes. A stale Mac becomes offline after its last contact passes the 35-second TTL; quitting sends an explicit offline report. Foreground/menu handoffs reconnect and revalidate pending commands.
+
+Deploy the Worker, rate-limit bindings, and site assets first, then update the Mac client. Old HTTP clients remain supported. Native entry limits are approximate per Cloudflare location; authenticated device limits remain in the device DO. Custom deployments without both rate bindings use the legacy rate DO fallback; rate namespace IDs must be unique in your account. WebSocket tokens travel in the handshake subprotocol header, never the URL. Request, duration, and storage usage must be measured separately when comparing costs.
 
 ## How it works
 

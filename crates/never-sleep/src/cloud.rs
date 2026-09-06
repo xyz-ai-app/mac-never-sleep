@@ -1,3 +1,6 @@
+#[path = "cloud_socket.rs"]
+mod socket;
+
 use std::collections::HashSet;
 use std::fs;
 use std::io::{self, Read, Seek, SeekFrom, Write};
@@ -8,7 +11,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError, SyncSender};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 fn unix_now_secs() -> u64 {
     SystemTime::now()
@@ -151,6 +154,7 @@ impl CloudHandle {
 
     /// Unpark heartbeats after a handoff that was not accepted.
     pub fn resume(&self) {
+        forget_pending_ids(&self.last_pending);
         if let Ok(mut idle) = self.idle.0.lock() {
             *idle = false;
         }
@@ -361,8 +365,43 @@ pub fn cloud_origin() -> String {
         .unwrap_or_else(|| PUBLIC_SITE_ORIGIN.to_string())
 }
 
-pub fn cloud_enabled() -> bool {
-    cfg!(target_os = "macos") || std::env::var(CLOUD_URL_ENV).is_ok()
+pub fn cloud_enabled(config: &never_sleep_core::AppConfig) -> bool {
+    config.remote_enabled && (cfg!(target_os = "macos") || std::env::var(CLOUD_URL_ENV).is_ok())
+}
+
+#[cfg(any(test, target_os = "macos"))]
+pub fn reconcile_remote(
+    config: &never_sleep_core::AppConfig,
+    ipc_owned: bool,
+    cloud: &mut Option<CloudHandle>,
+    identity: &mut Option<never_sleep_core::CloudIdentity>,
+    pairing: &mut Option<(String, String, u64)>,
+) {
+    if !ipc_owned || !cloud_enabled(config) {
+        // Detach stops the transport without scheduling a final HTTP heartbeat.
+        if let Some(handle) = cloud.take() {
+            handle.detach();
+        }
+        *identity = None;
+        *pairing = None;
+        return;
+    }
+    if cloud.is_none() {
+        match load_or_create_identity() {
+            Ok(id) => {
+                *cloud = Some(spawn_reporter_paused(
+                    id.clone(),
+                    default_display_name(),
+                    config.lang(),
+                    crate::session_lock::should_pause_menu_reporter(
+                        crate::session_lock::peer_reporter_lock_is_live(std::process::id()),
+                    ),
+                ));
+                *identity = Some(id);
+            }
+            Err(err) => eprintln!("never-sleep cloud identity: {err}"),
+        }
+    }
 }
 
 /// Phone-board cards and localStorage reservations share this cap.
@@ -754,6 +793,32 @@ fn take_latest(latest: &Mutex<Option<(JsonStatus, Lang)>>) -> Option<(JsonStatus
     latest.lock().ok().and_then(|mut slot| slot.take())
 }
 
+// Independent of the local policy/UI clock. Keep below the Worker's 35s TTL.
+const CLOUD_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(10);
+
+fn live_status_changed(before: &JsonStatus, after: &JsonStatus, elapsed: u64) -> bool {
+    let mut projected = before.clone();
+    projected.elapsed_secs = before.elapsed_secs.map(|n| n.saturating_add(elapsed));
+    projected.remaining_secs = before.remaining_secs.map(|n| n.saturating_sub(elapsed));
+    for (expected, actual) in [
+        (projected.elapsed_secs, after.elapsed_secs),
+        (projected.remaining_secs, after.remaining_secs),
+    ] {
+        match (expected, actual) {
+            (Some(a), Some(b)) if a.abs_diff(b) <= 2 => {}
+            (None, None) => {}
+            _ => return true,
+        }
+    }
+    projected.elapsed_secs = after.elapsed_secs;
+    projected.remaining_secs = after.remaining_secs;
+    projected != *after
+}
+
+fn heartbeat_due(elapsed: Duration, shutting_down: bool) -> bool {
+    shutting_down || elapsed >= CLOUD_HEARTBEAT_INTERVAL
+}
+
 fn should_reporter_tick(has_snapshot: bool, shutting_down: bool) -> bool {
     has_snapshot || shutting_down
 }
@@ -929,8 +994,16 @@ fn reporter_loop(
     let mut gate = ReporterGate::default();
     let mut inbox = CommandInbox::default();
     let mut last: Option<(JsonStatus, Lang)> = None;
+    let mut last_attempt: Option<Instant> = None;
+    let mut live = socket::LiveSocket::new();
     loop {
         if paused.load(Ordering::SeqCst) && !detached.load(Ordering::SeqCst) {
+            for raw in live.read_pending() {
+                if let Ok(outcome) = parse_heartbeat_response(&raw) {
+                    emit_outcome(&mut gate, &mut inbox, &event_tx, &last_pending, outcome);
+                }
+            }
+            live.disconnect();
             match park_quiesced_reporter(&wake_rx, &detached, &paused, &idle) {
                 QuiescePark::Break => break,
                 QuiescePark::Shutdown => {}
@@ -943,7 +1016,14 @@ fn reporter_loop(
             } else if paused.load(Ordering::SeqCst) {
                 Ok(ReporterWake::Shutdown)
             } else {
-                wake_rx.recv_timeout(Duration::from_secs(3))
+                let wait = last_attempt.map_or(CLOUD_HEARTBEAT_INTERVAL, |at| {
+                    CLOUD_HEARTBEAT_INTERVAL.saturating_sub(at.elapsed())
+                });
+                wake_rx.recv_timeout(if live.connected() {
+                    Duration::from_millis(200)
+                } else {
+                    wait
+                })
             };
             let (drained_shutdown, drained_detach) = drain_reporter_wakes(&wake_rx);
             let shutting_down = shutting_down_from_wake(recv, drained_shutdown || drained_detach);
@@ -970,6 +1050,40 @@ fn reporter_loop(
             }
             continue;
         };
+        inbox.mark_applied(take_applied_ids(&applied_ids));
+        if !shutting_down && !paused.load(Ordering::SeqCst) {
+            if !gate.needs_pair_start() {
+                live.connect_if_due(&transport.origin, &identity);
+            }
+            let was_connected = live.connected();
+            for raw in live.tick(&identity, &display_name, status, *lang, inbox.ack_ids()) {
+                if let Ok(outcome) = parse_heartbeat_response(&raw) {
+                    let pending =
+                        emit_outcome(&mut gate, &mut inbox, &event_tx, &last_pending, outcome);
+                    prune_applied_history_after_heartbeat(
+                        &applied_history,
+                        Some(&pending),
+                        &applied_ids,
+                        retain_applied.load(Ordering::SeqCst),
+                    );
+                } else {
+                    live.reject();
+                    forget_pending_ids(&last_pending);
+                }
+            }
+            if was_connected && !live.connected() {
+                forget_pending_ids(&last_pending);
+            }
+            if live.connected() && !gate.needs_pair_start() {
+                continue;
+            }
+        }
+        // Snapshot wakes replace `last`, but never reset the network deadline.
+        // Count failed attempts too: frequent GUI wakes must not amplify outages.
+        if last_attempt.is_some_and(|at| !heartbeat_due(at.elapsed(), shutting_down)) {
+            continue;
+        }
+        last_attempt = Some(Instant::now());
         inbox.mark_applied(take_applied_ids(&applied_ids));
         let pending = reporter_tick(
             &mut gate,
@@ -1021,6 +1135,7 @@ fn reporter_loop(
             }
         }
     }
+    live.disconnect();
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1316,6 +1431,91 @@ mod tests {
             screen_off_enabled: true,
             lid_awake_enabled: true,
         }
+    }
+
+    #[test]
+    fn local_only_start_never_creates_identity_or_reporter() {
+        let _dir = TestDataDir::install();
+        let config = AppConfig::default();
+        assert!(!cloud_enabled(&config));
+        let (mut cloud, mut identity, mut pairing) = (None, None, None);
+        for _ in 0..3 {
+            reconcile_remote(&config, true, &mut cloud, &mut identity, &mut pairing);
+        }
+        assert!(cloud.is_none());
+        assert!(identity.is_none());
+        assert!(pairing.is_none());
+        assert!(!cloud_identity_path().exists());
+    }
+
+    #[test]
+    fn disabling_remote_discards_events_and_stops_without_final_heartbeat() {
+        let _dir = TestDataDir::install();
+        let (wake_tx, wake_rx) = mpsc::sync_channel(2);
+        let (event_tx, events) = mpsc::channel();
+        event_tx
+            .send(CloudEvent::Pairing {
+                code: "AB7K2Q9M".into(),
+                url: "https://example.com/".into(),
+                expires_unix: u64::MAX,
+            })
+            .unwrap();
+        let handle = test_cloud_handle(wake_tx, events);
+        let detached = handle.detached.clone();
+        let mut cloud = Some(handle);
+        let mut identity = Some(load_or_create_identity().unwrap());
+        let mut pairing = Some(("AB7K2Q9M".into(), "https://example.com/".into(), u64::MAX));
+        reconcile_remote(
+            &AppConfig::default(),
+            true,
+            &mut cloud,
+            &mut identity,
+            &mut pairing,
+        );
+        assert!(cloud.is_none());
+        assert!(identity.is_none());
+        assert!(pairing.is_none());
+        assert!(detached.load(Ordering::SeqCst));
+        assert!(matches!(wake_rx.recv().unwrap(), ReporterWake::Detach));
+        assert!(
+            wake_rx.try_recv().is_err(),
+            "no Shutdown wake may send an offline POST"
+        );
+    }
+
+    #[test]
+    fn menu_without_ipc_ownership_cannot_start_remote() {
+        let _dir = TestDataDir::install();
+        let config = AppConfig {
+            remote_enabled: true,
+            ..AppConfig::default()
+        };
+        let (mut cloud, mut identity, mut pairing) = (None, None, None);
+        reconcile_remote(&config, false, &mut cloud, &mut identity, &mut pairing);
+        assert!(cloud.is_none());
+        assert!(!cloud_identity_path().exists());
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn enabling_remote_can_restart_with_the_same_saved_pairing_identity() {
+        let _dir = TestDataDir::install();
+        let mut config = AppConfig {
+            remote_enabled: true,
+            ..AppConfig::default()
+        };
+        let (mut cloud, mut identity, mut pairing) = (None, None, None);
+        // No snapshot is queued: the real reporter has nothing to send to the network.
+        reconcile_remote(&config, true, &mut cloud, &mut identity, &mut pairing);
+        assert!(cloud.as_ref().unwrap().reporter_is_running());
+        let first = identity.clone().unwrap();
+        config.remote_enabled = false;
+        reconcile_remote(&config, true, &mut cloud, &mut identity, &mut pairing);
+        config.remote_enabled = true;
+        reconcile_remote(&config, true, &mut cloud, &mut identity, &mut pairing);
+        assert!(cloud.as_ref().unwrap().reporter_is_running());
+        assert_eq!(identity.unwrap().device_id, first.device_id);
+        cloud.take().unwrap().detach();
     }
 
     #[test]
@@ -2857,6 +3057,49 @@ mod tests {
     }
 
     #[test]
+    fn resumed_reporter_requires_a_fresh_pending_snapshot() {
+        let handle = test_cloud_handle(mpsc::sync_channel(2).0, mpsc::channel().1);
+        handle.note_pending(&[RemoteCommand::on("old-on", None)]);
+        handle.resume();
+        assert_eq!(handle.last_pending_ids(), None);
+    }
+
+    #[test]
+    fn live_status_ignores_clock_ticks_but_reports_state_and_deadline_changes() {
+        let mut before = sample_status();
+        before.active = true;
+        before.elapsed_secs = Some(10);
+        before.remaining_secs = Some(100);
+        let mut after = before.clone();
+        after.elapsed_secs = Some(11);
+        after.remaining_secs = Some(99);
+        assert!(!live_status_changed(&before, &after, 1));
+        after.remaining_secs = Some(200);
+        assert!(live_status_changed(&before, &after, 1));
+        after = before.clone();
+        after.display = if before.display == "asleep" {
+            "awake"
+        } else {
+            "asleep"
+        }
+        .into();
+        assert!(live_status_changed(&before, &after, 0));
+    }
+
+    #[test]
+    fn snapshot_wakes_cannot_exceed_cloud_heartbeat_budget() {
+        // Local sampling must not turn into one network request per sample.
+        for ms in [0, 250, 1000, 3000, 4999, 9999] {
+            assert!(!heartbeat_due(Duration::from_millis(ms), false));
+        }
+        assert!(heartbeat_due(Duration::from_secs(10), false));
+        assert!(
+            heartbeat_due(Duration::ZERO, true),
+            "quit bypasses batching"
+        );
+    }
+
+    #[test]
     fn timeout_reuses_last_snapshot_for_heartbeat() {
         assert!(
             !should_reporter_tick(false, false),
@@ -2864,7 +3107,7 @@ mod tests {
         );
         assert!(
             should_reporter_tick(true, false),
-            "a 3s recv timeout must reuse last so a blocked onboarding dialog cannot look offline"
+            "a heartbeat deadline must reuse last so a blocked onboarding dialog cannot look offline"
         );
         assert!(
             should_reporter_tick(false, true),

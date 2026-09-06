@@ -1018,11 +1018,11 @@ mod tests {
         );
         assert!(!should_resume_paused_menu_reporter(false, false, true));
         let gui = include_str!("gui.rs");
-        let spawn = gui
-            .split("let mut cloud = if ipc_owned")
+        let spawn = include_str!("cloud.rs")
+            .split("pub fn reconcile_remote")
             .nth(1)
             .expect("menu cloud spawn")
-            .split("event_loop.run")
+            .split("/// Phone-board cards")
             .next()
             .unwrap();
         assert!(
@@ -1154,7 +1154,7 @@ mod tests {
             "handoff IPC must confirm this process adopted, and Toggle must not start over a live donor"
         );
         assert!(
-            gui.contains("ipc_owned") && gui.contains("spawn_reporter"),
+            gui.contains("ipc_owned") && gui.contains("reconcile_remote"),
             "menu reporter starts only after this process owns the IPC socket"
         );
         let _dir = crate::paths::TestDataDir::install();

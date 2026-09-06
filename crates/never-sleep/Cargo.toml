@@ -19,6 +19,7 @@ dirs = { workspace = true }
 ctrlc = { workspace = true }
 chrono = { workspace = true }
 ureq = { version = "2.12", default-features = true }
+tungstenite = { version = "0.26", features = ["rustls-tls-webpki-roots"] }
 qrcode = { version = "0.14", default-features = false }
 
 [target.'cfg(unix)'.dependencies]

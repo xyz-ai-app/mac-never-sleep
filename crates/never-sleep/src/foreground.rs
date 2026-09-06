@@ -19,7 +19,7 @@ pub fn run_foreground(
     if crate::ipc::should_refuse_foreground_while_menu_live(menu_socket_absent()) {
         return Err(engine.config.tr().menu_ipc_timed_out().into());
     }
-    let cloud_ok = crate::cloud::cloud_enabled();
+    let mut cloud_ok = crate::cloud::cloud_enabled(&engine.config);
     // Claim before the second socket probe so a menu bind cannot skip the lock.
     // `true` is the first probe's conclusion; do not snapshot the socket again.
     let needs_reporter = crate::session_lock::should_claim_foreground_reporter_lock(cloud_ok, true);
@@ -66,6 +66,15 @@ pub fn run_foreground(
     println!("{}", t.foreground_status_hint());
 
     while running.load(Ordering::SeqCst) && engine.is_active() {
+        // A menu can change the persisted preference before adopting this session.
+        engine.config.remote_enabled = load_config().remote_enabled;
+        cloud_ok = crate::cloud::cloud_enabled(&engine.config);
+        if !cloud_ok {
+            if let Some(handle) = cloud.take() {
+                handle.detach();
+            }
+            pairing = None;
+        }
         if let Some(ack) = crate::protocol::read_handoff_ack() {
             if crate::protocol::donor_should_stop_after_successor_gone(
                 handoff_id.as_deref(),
@@ -338,6 +347,20 @@ pub fn parse_optional_duration(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn foreground_observes_remote_opt_out_while_menu_is_taking_over() {
+        let source = include_str!("foreground.rs");
+        let loop_body = source
+            .split("while running.load")
+            .nth(1)
+            .unwrap()
+            .split("fn spawn_foreground_reporter")
+            .next()
+            .unwrap();
+        assert!(loop_body.contains("load_config().remote_enabled"));
+        assert!(loop_body.contains("handle.detach()"));
+    }
 
     #[test]
     fn parse_optional_duration_passthrough() {

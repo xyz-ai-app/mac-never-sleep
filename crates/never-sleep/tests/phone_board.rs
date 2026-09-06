@@ -102,7 +102,7 @@ fn board_client_uses_public_prefix_and_has_no_unauthenticated_toggle() {
         js.contains("function withListFailure"),
         "list transport failures must mark cached devices offline"
     );
-    assert!(js.contains("withListFailure(lastStatuses)"));
+    assert!(js.contains("withListFailure(lastStatuses.filter"));
     assert!(js.contains("LIST_MAX_DEVICES = 32"));
     assert!(js.contains("while (next.length > LIST_MAX_DEVICES)"));
     assert!(js.contains("next.shift()"));
@@ -137,11 +137,17 @@ fn board_client_uses_public_prefix_and_has_no_unauthenticated_toggle() {
 #[test]
 fn worker_board_logic_is_tested_in_node() {
     let status = Command::new("node")
-        .args(["--test", "worker/test/board.test.js"])
+        .args([
+            "--test",
+            "worker/test/board.test.js",
+            "worker/test/heartbeat-budget.test.js",
+            "worker/test/live.test.js",
+            "worker/test/board-live.test.js",
+        ])
         .current_dir(root())
         .status()
         .expect("node --test");
-    assert!(status.success(), "worker/test/board.test.js must pass");
+    assert!(status.success(), "Worker tests must pass");
 }
 
 #[test]
@@ -217,15 +223,17 @@ fn worker_shards_per_device_not_one_global_board() {
         .nth(1)
         .expect("pair/start catch-all");
     let catch_all_shard = after_pair_start
-        .find("const name = shardName(path, body);")
-        .expect("device catch-all shardName");
+        .find("const res = await stubFetch(env, name")
+        .expect("device catch-all dispatch");
     let catch_all = &after_pair_start[..catch_all_shard];
     assert!(
         catch_all.contains("/api/heartbeat") && catch_all.contains("/api/command"),
         "unknown /api paths must not open device shards"
     );
     let not_found_at = catch_all.find("not_found").expect("unknown path 404");
-    let device_rate_at = catch_all.find("rate:device").expect("device rate gate");
+    let device_rate_at = catch_all
+        .find("await deviceEntryGate")
+        .expect("device rate gate");
     assert!(
         not_found_at < device_rate_at,
         "unknown /api paths must 404 before the device rate shard"
@@ -244,8 +252,8 @@ fn worker_shards_per_device_not_one_global_board() {
     );
     let client = read("site/assets/board.js");
     assert!(
-        client.contains("setInterval(refresh, 2500)"),
-        "list global cap is sized from this poll interval"
+        client.contains("fallbackAt < 30000"),
+        "new boards use low-frequency HTTP fallback"
     );
     assert!(board.contains("LIST_GLOBAL_MIN_BOARDS"));
     assert!(index.contains("clientIp"));

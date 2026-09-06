@@ -138,7 +138,7 @@ pub fn main_column_height() -> f64 {
         + FOOTER_HEIGHT
 }
 
-/// Packed settings column: head, 8-row card (duration + six switches + pairing), language, chrome.
+/// Packed settings column: head, 8-row card (duration + seven switches; remote row includes pairing), language, chrome.
 pub fn settings_column_height() -> f64 {
     CONTENT_INSET * 2.0
         + SHEET_HEAD_HEIGHT
@@ -499,6 +499,8 @@ pub struct PanelState {
     pub help_note_lid: String,
     pub help_note_battery: String,
     pub help_note_quit: String,
+    pub remote_enabled: bool,
+    pub remote_label: String,
     pub pairing_label: String,
     pub pairing_code: String,
     pub pairing_url: String,
@@ -506,6 +508,9 @@ pub struct PanelState {
 
 impl PanelState {
     pub fn with_pairing(mut self, code: &str, url: &str) -> Self {
+        if !self.remote_enabled {
+            return self;
+        }
         let normalized = never_sleep_core::normalize_pairing_code(code)
             .unwrap_or_else(|| code.replace('-', "").to_ascii_uppercase());
         self.pairing_code = never_sleep_core::format_pairing_code(&normalized);
@@ -590,6 +595,8 @@ pub fn panel_state(cfg: &AppConfig, vm: &ViewModel) -> PanelState {
         help_note_lid: t.help_note_lid().into(),
         help_note_battery: t.help_note_battery().into(),
         help_note_quit: t.help_note_quit().into(),
+        remote_enabled: cfg.remote_enabled,
+        remote_label: t.remote_access().into(),
         pairing_label: t.phone_board().into(),
         pairing_code: String::new(),
         pairing_url: String::new(),
@@ -895,7 +902,7 @@ mod tests {
                 + LANGUAGE_HEIGHT
                 + FOOTER_GAP
                 + FOOTER_HEIGHT,
-            "settings holds duration, six switches, and the phone pairing code"
+            "settings holds duration and seven switches, with pairing in the remote row"
         );
         assert_eq!(
             panel_hug_height(),
@@ -1133,8 +1140,21 @@ mod tests {
     }
 
     #[test]
-    fn pairing_row_surfaces_code_on_settings() {
+    fn local_only_panel_discards_pairing_credentials() {
         let cfg = AppConfig::default();
+        let engine = Engine::new(cfg.clone());
+        let state = panel_state(&cfg, &engine.view(&host()))
+            .with_pairing("AB7K2Q9M", "https://example.com/board/?code=AB7K2Q9M");
+        assert!(state.pairing_code.is_empty());
+        assert!(state.pairing_url.is_empty());
+    }
+
+    #[test]
+    fn pairing_row_surfaces_code_on_settings() {
+        let cfg = AppConfig {
+            remote_enabled: true,
+            ..AppConfig::default()
+        };
         let engine = Engine::new(cfg.clone());
         let state = panel_state(&cfg, &engine.view(&host())).with_pairing(
             "ab7k-2q9m",
