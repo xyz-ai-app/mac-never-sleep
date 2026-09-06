@@ -1315,7 +1315,7 @@ dependencies = [
 
 [[package]]
 name = "never-sleep"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "chrono",
  "clap",
@@ -1341,7 +1341,7 @@ dependencies = [
 
 [[package]]
 name = "never-sleep-core"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "chrono",
  "serde",
