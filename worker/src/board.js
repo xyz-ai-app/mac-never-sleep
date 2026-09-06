@@ -1,4 +1,4 @@
-//! Phone-board Worker: pairing, heartbeats, and authenticated on/off.
+//! Phone-board Worker: pairing, heartbeats, and authenticated standby and display control.
 //!
 //! The Durable Object wrapper lives in `index.js`. This module is the policy
 //! the tests lock — no Cloudflare runtime required.
@@ -935,7 +935,7 @@ export class Board {
     if (!device || !tokensMatch(device.token, deviceToken)) {
       return { ok: false, error: "unauthorized", status: 401 };
     }
-    if (cmd !== "on" && cmd !== "off") {
+    if (cmd !== "on" && cmd !== "off" && cmd !== "sleep_display") {
       return { ok: false, error: "bad_cmd", status: 400 };
     }
     const online =

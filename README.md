@@ -121,6 +121,7 @@ Watch every paired Mac from your phone, and start or end Screen-Off Standby remo
 3. The list is live: online/offline (recent heartbeat), standby on/off, display asleep vs awake, lid, AC vs battery %, remaining time, and the machine name.
 4. **Start Screen-Off Standby** and **End Standby** apply to the Mac you tap, not the whole list. The phone authenticates with that machine’s pairing token. The Mac runs the same local `on` / `off` Engine path as the menu bar (no Energy Saver rewrite).
 5. If the Mac is offline, the board reports that the command did not apply. It will not fake a status change. Remote start still will not force-sleep the display while someone is at the keyboard.
+6. **Sleep Display Now** explicitly turns off the display, even after recent keyboard/mouse activity and even when standby is off. It does not start/end standby or reset its timer. Delivery uses the heartbeat and may take a few seconds; both the Mac app and Worker need this update. Remote start may defer automatic display sleep when recent input is detected.
 
 ## How it works
 

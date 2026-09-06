@@ -379,9 +379,6 @@ impl Engine {
     }
 
     fn sleep_display_now(&mut self, host: &HostSnapshot, effects: &mut Vec<Effect>) {
-        if self.session.is_none() {
-            return;
-        }
         self.emit_sleep_display(host, effects);
     }
 
@@ -1324,10 +1321,11 @@ mod tests {
     }
 
     #[test]
-    fn sleep_display_now_ignored_when_idle() {
+    fn sleep_display_now_works_without_starting_standby() {
         let mut eng = Engine::new(cfg());
         let e = eng.handle(Input::SleepDisplayNow, &host(0));
-        assert!(e.is_empty());
+        assert!(has_sleep(&e));
+        assert!(!has_release(&e));
         assert!(!eng.is_active());
     }
 

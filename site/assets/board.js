@@ -9,6 +9,9 @@
         add: "添加 Mac",
         start: "开始关屏待命",
         end: "结束待命",
+        sleepNow: "立即熄屏",
+        sleeping: "正在发送熄屏指令…",
+        sleepDeferred: "检测到近期键鼠活动，自动熄屏可能推迟；可点立即熄屏。指令送达可能需要数秒。",
         online: "在线",
         offline: "离线",
         lastSeen: "上次见到",
@@ -35,6 +38,9 @@
         add: "Add Mac",
         start: "Start Screen-Off Standby",
         end: "End Standby",
+        sleepNow: "Sleep Display Now",
+        sleeping: "Sending display sleep…",
+        sleepDeferred: "Recent keyboard or mouse activity may delay automatic display sleep. Use Sleep Display Now; delivery may take a few seconds.",
         online: "Online",
         offline: "Offline",
         lastSeen: "Last seen",
@@ -253,7 +259,7 @@
   function devicePendingCmd(pendingByDevice, deviceId) {
     if (!pendingByDevice || deviceId == null) return null;
     const cmd = pendingByDevice[deviceId];
-    return cmd === "on" || cmd === "off" ? cmd : null;
+    return cmd === "on" || cmd === "off" || cmd === "sleep_display" ? cmd : null;
   }
 
   function withDevicePending(pendingByDevice, deviceId, cmd) {
@@ -401,6 +407,9 @@
         el("div", "", `${copy.lastSeen} ${formatLastSeen(st.last_seen_unix)}`),
       );
       card.appendChild(meta);
+      if (st.online && st.active && st.display !== "asleep" && st.user_present && st.screen_off_enabled) {
+        card.appendChild(el("p", "device-sleep-note", copy.sleepDeferred));
+      }
 
       const actions = el("div", "device-actions");
       const startBtn = el("button", "btn btn-primary", copy.start);
@@ -421,6 +430,12 @@
       endBtn.hidden = !st.active;
       actions.appendChild(startBtn);
       actions.appendChild(endBtn);
+      const sleepBtn = el("button", "btn btn-secondary", pendingCmd === "sleep_display" ? copy.sleeping : copy.sleepNow);
+      sleepBtn.type = "button";
+      sleepBtn.setAttribute("data-cmd", "sleep_display");
+      sleepBtn.disabled = !st.online || busy;
+      sleepBtn.addEventListener("click", () => sendCommand(stored, "sleep_display"));
+      actions.appendChild(sleepBtn);
       card.appendChild(actions);
 
       const forget = el("button", "forget", copy.forget);

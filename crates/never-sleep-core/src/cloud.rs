@@ -63,7 +63,7 @@ impl RemoteCommand {
     }
 
     pub fn is_allowed_cmd(cmd: &str) -> bool {
-        matches!(cmd, "on" | "off")
+        matches!(cmd, "on" | "off" | "sleep_display")
     }
 
     /// Map a phone command onto Engine input. Unknown cmds are rejected.
@@ -73,6 +73,7 @@ impl RemoteCommand {
                 None => Ok(Input::StartRemote),
                 Some(raw) => parse_duration_pref(raw).map(Input::StartRemoteWith),
             },
+            "sleep_display" => Ok(Input::SleepDisplayNow),
             "off" => Ok(Input::Stop {
                 reason: StopReason::User,
             }),
@@ -381,6 +382,26 @@ mod tests {
         }
         .to_input()
         .is_err());
+    }
+
+    #[test]
+    fn explicit_remote_sleep_darkens_immediately_without_changing_standby() {
+        let command: RemoteCommand =
+            serde_json::from_str(r#"{"id":"sleep-1","cmd":"sleep_display"}"#).unwrap();
+        assert!(RemoteCommand::is_allowed_cmd(&command.cmd));
+        for active in [false, true] {
+            let mut eng = Engine::new(AppConfig::default());
+            let h = host(0);
+            if active {
+                eng.handle(Input::StartRemote, &h);
+            }
+            let effects = apply_remote_command(&mut eng, &h, &command).unwrap();
+            assert!(has_sleep(&effects));
+            assert_eq!(eng.is_active(), active);
+            assert!(!effects
+                .iter()
+                .any(|e| matches!(e, Effect::ApplyPower(_) | Effect::ReleasePower)));
+        }
     }
 
     #[test]

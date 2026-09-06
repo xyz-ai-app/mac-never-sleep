@@ -94,7 +94,7 @@ fn board_client_uses_public_prefix_and_has_no_unauthenticated_toggle() {
     assert!(js.contains("textContent"));
     assert!(js.contains("networkError"));
     assert!(
-        !js.contains("st.online && st.active"),
+        !js.contains("st.online && st.active ? copy.standbyOn"),
         "offline Macs must keep last-known standby, not paint Standby off"
     );
     assert!(js.contains("st.active ? copy.standbyOn : copy.standbyOff"));
@@ -403,4 +403,14 @@ fn pairing_and_home_offer_direct_actions() {
     );
     assert!(js.contains("startBtn.hidden = st.active"));
     assert!(js.contains("endBtn.hidden = !st.active"));
+}
+
+#[test]
+fn board_offers_explicit_bilingual_display_sleep() {
+    let js = read("site/assets/board.js");
+    assert!(js.contains("立即熄屏"));
+    assert!(js.contains("检测到近期键鼠活动，自动熄屏可能推迟"));
+    assert!(js.contains("Recent keyboard or mouse activity may delay automatic display sleep"));
+    assert!(js.contains("Sleep Display Now"));
+    assert!(js.contains("sendCommand(stored, \"sleep_display\")"));
 }

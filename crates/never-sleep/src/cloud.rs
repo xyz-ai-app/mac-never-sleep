@@ -1671,7 +1671,7 @@ mod tests {
     }
 
     #[test]
-    fn heartbeat_response_keeps_on_off_drops_toggle() {
+    fn heartbeat_response_keeps_display_sleep_on_off_drops_toggle() {
         let raw = r#"{
             "ok": true,
             "pairing_code": "AB7K-2Q9M",
@@ -1679,15 +1679,17 @@ mod tests {
             "commands": [
                 {"id": "1", "cmd": "on", "duration": "8h"},
                 {"id": "2", "cmd": "toggle"},
-                {"id": "3", "cmd": "off"}
+                {"id": "3", "cmd": "off"},
+                {"id": "4", "cmd": "sleep_display"}
             ]
         }"#;
         let outcome = parse_heartbeat_response(raw).unwrap();
         assert_eq!(outcome.pairing_code.as_deref(), Some("AB7K-2Q9M"));
         assert!(outcome.pairing_present());
-        assert_eq!(outcome.commands.len(), 2);
+        assert_eq!(outcome.commands.len(), 3);
         assert_eq!(outcome.commands[0].cmd, "on");
         assert_eq!(outcome.commands[1].cmd, "off");
+        assert_eq!(outcome.commands[2].cmd, "sleep_display");
     }
 
     #[test]

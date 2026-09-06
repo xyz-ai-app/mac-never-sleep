@@ -595,8 +595,11 @@ a:focus-visible {
 .board-page .active .device-meta > div { border-color: #3a3a3c; }
 .board-page .device-actions { display: block; margin-top: 20px; }
 .board-page .device-actions button { width: 100%; }
+.board-page .device-actions button[data-cmd="sleep_display"] { margin-top: 8px; }
 .board-page .btn-danger { background: #f5f5f7; color: #1c1c1e; border: 1px solid #ddd; }
 .board-page .forget { display: block; margin: 16px auto 0; color: #86868b; min-height: 44px; }
 .board-page [hidden] { display: none !important; }
 .board-page button:focus-visible, .board-page input:focus-visible { outline: 3px solid #007aff; outline-offset: 3px; }
 @media(max-width: 440px) { .board-page .pair-form { flex-direction: column; } .board-page .pair-form input, .board-page .pair-form button { width: 100%; } }
+
+.device-sleep-note { font-size: 13px; line-height: 1.5; margin: 12px 0 0; }

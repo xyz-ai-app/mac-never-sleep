@@ -1318,6 +1318,7 @@ test("command pending state is tracked per Mac", () => {
     new Function(
       `${src.slice(start, end)}\nreturn { devicePendingCmd, withDevicePending, withoutDevicePending };`,
     )();
+  assert.equal(devicePendingCmd({ "mac-c": "sleep_display" }, "mac-c"), "sleep_display");
   let pending = {};
   pending = withDevicePending(pending, "mac-a", "on");
   pending = withDevicePending(pending, "mac-b", "off");
@@ -2563,4 +2564,27 @@ test("pair start still returns the new code when replaced-shard cleanup fails", 
     /bestEffortCleanup\([\s\S]*replaced_codes/,
     "replaced pair-shard drops must not block returning a live code",
   );
+});
+
+test("explicit display sleep is authenticated, delivered and acknowledged", async () => {
+  let now = 1000;
+  const board = new Board(() => now);
+  const id = identity();
+  await post(board, "/api/pair/start", id);
+  await post(board, "/api/heartbeat", { ...id, status: sampleStatus() });
+  const denied = await json(await post(board, "/api/command", {
+    ...id, device_token: "00".repeat(32), cmd: "sleep_display",
+  }));
+  assert.equal(denied.status, 401);
+  const sent = await json(await post(board, "/api/command", { ...id, cmd: "sleep_display" }));
+  assert.equal(sent.body.accepted, true);
+  const beat = await json(await post(board, "/api/heartbeat", { ...id, status: sampleStatus() }));
+  assert.equal(beat.body.commands[0].cmd, "sleep_display");
+  const ack = await json(await post(board, "/api/heartbeat", {
+    ...id, status: sampleStatus(), ack_command_ids: [sent.body.command_id],
+  }));
+  assert.deepEqual(ack.body.commands, []);
+  now += HEARTBEAT_TTL_SECS + 1;
+  const offline = await json(await post(board, "/api/command", { ...id, cmd: "sleep_display" }));
+  assert.equal(offline.status, 409);
 });
