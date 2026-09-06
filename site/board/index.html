@@ -30,19 +30,19 @@
       </div>
       <div class="hero-copy">
         <p class="kicker">Phone board</p>
-        <h1>Your Macs, live.</h1>
+        <h1>Your Mac. The same familiar controls.</h1>
         <p class="lede">Pair with the code in More Settings. Start or End Screen-Off Standby on one machine at a time. Display sleep still will not fight someone at the keyboard.</p>
       </div>
     </div>
   </header>
   <main id="main" class="board-main">
     <div class="wrap">
-      <p class="board-note">Commands need that Mac’s pairing token. Offline Macs stay last-seen — the board will not pretend standby changed.</p>
+      <p class="board-note">Scan the QR code in More Settings with your phone camera, or enter the code below. Offline Macs show their last known state.</p>
       <form class="pair-form" id="pair-form">
-        <input id="pair-code" name="code" inputmode="text" autocomplete="off" spellcheck="false" maxlength="9" placeholder="AB7K-2Q9M" aria-label="Pairing code">
+        <input id="pair-code" name="code" inputmode="text" autocomplete="one-time-code" autocapitalize="characters" required spellcheck="false" maxlength="9" placeholder="AB7K-2Q9M" aria-label="Pairing code">
         <button class="btn btn-primary" type="submit">Add Mac</button>
       </form>
-      <p class="board-error" id="board-error" hidden></p>
+      <p class="board-error" id="board-error" role="alert" hidden></p>
       <p class="board-empty" id="board-empty">No Macs yet. Open Never Sleep on the computer, copy the pairing code, and add it here.</p>
       <div class="device-list" id="device-list"></div>
     </div>

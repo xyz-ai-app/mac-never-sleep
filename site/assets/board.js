@@ -348,7 +348,7 @@
         byId.get(stored.device_id),
         prevById.get(stored.device_id),
       );
-      const card = el("article", "device-card" + (st.online ? "" : " offline"));
+      const card = el("article", "device-card" + (st.active ? " active" : "") + (st.online ? "" : " offline"));
       const power = st.on_ac
         ? copy.ac
         : `${copy.battery}${st.battery != null ? ` ${st.battery}%` : ""}`;
@@ -369,6 +369,15 @@
         ),
       );
       card.appendChild(head);
+      const coin = el("img", "device-coin");
+      const assets = document.querySelector('link[rel="icon"]').href.replace(/favicon\.png$/, "");
+      coin.src = assets + (st.active ? "moon.png" : "sun.png");
+      coin.alt = "";
+      coin.width = 104;
+      coin.height = 104;
+      card.appendChild(coin);
+      card.appendChild(el("h2", "device-status", st.active ? copy.standbyOn : copy.standbyOff));
+
 
       const meta = el("dl", "device-meta");
       const standby = el("div");
@@ -408,6 +417,8 @@
       if (busy && pendingCmd === "off") endBtn.textContent = copy.ending;
       startBtn.addEventListener("click", () => sendCommand(stored, "on"));
       endBtn.addEventListener("click", () => sendCommand(stored, "off"));
+      startBtn.hidden = st.active;
+      endBtn.hidden = !st.active;
       actions.appendChild(startBtn);
       actions.appendChild(endBtn);
       card.appendChild(actions);
@@ -560,10 +571,17 @@
   function beginClaim(code) {
     if (claimInFlight) return claimPromise;
     claimInFlight = true;
+    const submit = document.querySelector('#pair-form button');
+    submit.disabled = true;
+    submit.textContent = zh ? "正在配对…" : "Pairing…";
     claimPromise = claim(code);
     const pending = claimPromise;
     pending.finally(() => {
-      if (claimPromise === pending) claimInFlight = false;
+      if (claimPromise === pending) {
+        claimInFlight = false;
+        submit.disabled = false;
+        submit.textContent = copy.add;
+      }
     });
     return claimPromise;
   }

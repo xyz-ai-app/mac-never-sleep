@@ -661,6 +661,16 @@ mod tests {
     }
 
     #[test]
+    fn shortcuts_and_pairing_keep_the_original_panel_height() {
+        assert_eq!(panel_hug_height(), 423.0);
+        let native = include_str!("native_panel.rs");
+        assert!(native.contains("self.quick_card.setHidden(state.active)"));
+        assert!(native.contains("TAG_SCREEN_OFF, mtm"));
+        assert!(native.contains("show_pairing"));
+        assert!(!native.contains("quick_resleep"));
+    }
+
+    #[test]
     fn preferred_glass_uses_liquid_glass_when_class_exists() {
         assert_eq!(preferred_glass(true), GlassKind::LiquidGlass);
         assert_eq!(preferred_glass(false), GlassKind::Vibrancy);

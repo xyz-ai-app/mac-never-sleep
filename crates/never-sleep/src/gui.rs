@@ -53,6 +53,7 @@ pub(crate) enum UiCommand {
     SetLanguage { language: String },
     Help,
     More,
+    PhoneBoard,
     Back,
     Quit,
 }
@@ -1093,6 +1094,11 @@ fn handle_ui_command(
         UiCommand::More => {
             if let Some(panel) = popover {
                 panel.ui.show_settings();
+            }
+        }
+        UiCommand::PhoneBoard => {
+            if let Some(panel) = popover {
+                panel.ui.show_pairing();
             }
         }
         UiCommand::Back => {

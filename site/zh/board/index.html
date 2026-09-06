@@ -30,19 +30,19 @@
       </div>
       <div class="hero-copy">
         <p class="kicker">手机看板</p>
-        <h1>电脑状态，当面看。</h1>
+        <h1>熟悉的操作，随时掌握。</h1>
         <p class="lede">用「更多设置」里的配对码添加这台 Mac。开始 / 结束关屏待命只作用于你点的那一台。人在键盘前，仍然不会强制关屏。</p>
       </div>
     </div>
   </header>
   <main id="main" class="board-main">
     <div class="wrap">
-      <p class="board-note">指令需要该机的配对令牌。离线时只显示上次见到的状态——看板不会假装待命已切换。</p>
+      <p class="board-note">用手机相机扫描「更多设置」中的二维码，或在下方输入配对码。离线时显示上次状态。</p>
       <form class="pair-form" id="pair-form">
-        <input id="pair-code" name="code" inputmode="text" autocomplete="off" spellcheck="false" maxlength="9" placeholder="AB7K-2Q9M" aria-label="配对码">
+        <input id="pair-code" name="code" inputmode="text" autocomplete="one-time-code" autocapitalize="characters" required spellcheck="false" maxlength="9" placeholder="AB7K-2Q9M" aria-label="配对码">
         <button class="btn btn-primary" type="submit">添加 Mac</button>
       </form>
-      <p class="board-error" id="board-error" hidden></p>
+      <p class="board-error" id="board-error" role="alert" hidden></p>
       <p class="board-empty" id="board-empty">还没有电脑。打开 Never Sleep，把设置里的配对码填到这里。</p>
       <div class="device-list" id="device-list"></div>
     </div>

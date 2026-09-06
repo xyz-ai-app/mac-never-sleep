@@ -1289,17 +1289,23 @@ test("partial list polls keep cached statuses for missing Macs", () => {
   assert.match(src, /lastStatuses = mergeListStatuses/);
 });
 
-test("beginClaim reuses an in-flight request for the same pairing code", () => {
+test("beginClaim reuses an in-flight request and restores the pairing button", async () => {
   const { src } = boardClientHelpers();
   const start = src.indexOf("function beginClaim");
   assert.notEqual(start, -1);
   const end = src.indexOf("\n  document.querySelectorAll", start);
-  const beginClaim = new Function(
+  const submit = { disabled: false, textContent: "Add Mac" };
+  const beginClaim = new Function("document", "zh", "copy",
     `let claimPromise = null;\nlet claimInFlight = false;\nfunction claim() { return Promise.resolve(true); }\n${src.slice(start, end)}\nreturn beginClaim;`,
-  )();
+  )({ querySelector: () => submit }, false, { add: "Add Mac" });
   const first = beginClaim("AB7K-2Q9M");
   const second = beginClaim("AB7K-2Q9M");
   assert.equal(first, second, "double submit must not start a second claim");
+  assert.equal(submit.disabled, true);
+  assert.equal(submit.textContent, "Pairing…");
+  await first;
+  assert.equal(submit.disabled, false);
+  assert.equal(submit.textContent, "Add Mac");
   assert.match(src, /claimInFlight/);
 });
 

@@ -1,6 +1,6 @@
 //! Native AppKit panel matching `docs/screenshots`: coin, Start pill, three sheets.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::ops::Deref;
 
 use objc2::rc::Retained;
@@ -50,6 +50,7 @@ const TAG_LOGIN: isize = 6;
 
 struct PanelIvars {
     proxy: EventLoopProxy<UserEvent>,
+    pairing_code: RefCell<String>,
 }
 
 define_class!(
@@ -62,6 +63,18 @@ define_class!(
     unsafe impl NSObjectProtocol for PanelTarget {}
 
     impl PanelTarget {
+        #[unsafe(method(copyPairing:))]
+        fn copy_pairing(&self, sender: Option<&NSButton>) {
+            let code = self.ivars().pairing_code.borrow();
+            if code.is_empty() { return; }
+            let pasteboard = objc2_app_kit::NSPasteboard::generalPasteboard();
+            pasteboard.clearContents();
+            let ok = unsafe { pasteboard.setString_forType(&ns(&code), objc2_app_kit::NSPasteboardTypeString) };
+            if ok {
+                if let Some(button) = sender { button.setTitle(&ns(if button.title().to_string().contains("复制") { "已复制 ✓" } else { "Copied ✓" })); }
+            }
+        }
+
         #[unsafe(method(toggle:))]
         fn toggle(&self, _sender: Option<&AnyObject>) {
             self.emit(UiCommand::Toggle);
@@ -71,6 +84,9 @@ define_class!(
         fn sleep_now(&self, _sender: Option<&AnyObject>) {
             self.emit(UiCommand::SleepDisplayNow);
         }
+
+        #[unsafe(method(phoneBoard:))]
+        fn phone_board(&self, _sender: Option<&AnyObject>) { self.emit(UiCommand::PhoneBoard); }
 
         #[unsafe(method(more:))]
         fn more(&self, _sender: Option<&AnyObject>) {
@@ -137,7 +153,10 @@ define_class!(
 
 impl PanelTarget {
     fn new(mtm: MainThreadMarker, proxy: EventLoopProxy<UserEvent>) -> Retained<Self> {
-        let this = Self::alloc(mtm).set_ivars(PanelIvars { proxy });
+        let this = Self::alloc(mtm).set_ivars(PanelIvars {
+            proxy,
+            pairing_code: RefCell::new(String::new()),
+        });
         unsafe { msg_send![super(this), init] }
     }
 
@@ -248,6 +267,24 @@ pub struct NativePanel {
     battery_settings: Retained<NSSwitch>,
     login_label: Retained<NSTextField>,
     login: Retained<NSSwitch>,
+    quick_duration: Retained<NSPopUpButton>,
+    quick_duration_label: Retained<NSTextField>,
+    quick_screen: Retained<NSSwitch>,
+    quick_screen_label: Retained<NSTextField>,
+    quick_card: Retained<NSView>,
+    status_stack: Retained<NSStackView>,
+    sleep_host: Retained<NSView>,
+    phone_main: Retained<NSButton>,
+    phone_settings: Retained<NSButton>,
+    pairing_view: Retained<NSView>,
+    pairing_open: bool,
+    pairing_title: Retained<NSTextField>,
+    pairing_back: Retained<NSButton>,
+    pairing_url: String,
+    pairing_lang: Option<never_sleep_core::Lang>,
+    pairing_qr: Retained<NSImageView>,
+    pairing_copy: Retained<NSButton>,
+    pairing_hint: Retained<NSTextField>,
     pairing_label: Retained<NSTextField>,
     pairing_value: Retained<NSTextField>,
     language: Retained<NSSegmentedControl>,
@@ -299,6 +336,8 @@ impl NativePanel {
         let kind = preferred_glass(glass_ok);
         let (root, wash, clip) = panel_shell(host, mtm, kind);
 
+        let pairing_view = NSView::new(mtm);
+        pin_fill(&root, &pairing_view);
         let main_view = NSView::new(mtm);
         let settings_view = NSView::new(mtm);
         let help_view = NSView::new(mtm);
@@ -424,6 +463,24 @@ impl NativePanel {
         hero_wrap.setAlignment(NSLayoutAttribute::CenterX);
         arrange(&hero_wrap, &hero_host);
 
+        let quick_duration_label = row_caption(mtm);
+        let quick_duration = NSPopUpButton::new(mtm);
+        quick_duration.setBordered(false);
+        unsafe {
+            quick_duration.setTarget(Some(as_any(&target)));
+            quick_duration.setAction(Some(sel!(durationChanged:)));
+        }
+        let (quick_screen_label, quick_screen, quick_screen_row) =
+            labeled_switch(&target, TAG_SCREEN_OFF, mtm);
+        let phone_main = text_button(&target, sel!(phoneBoard:), mtm);
+        let quick_card = grouped_card(
+            mtm,
+            &[
+                duration_row(&quick_duration_label, quick_duration.as_ref(), mtm),
+                quick_screen_row,
+                navigation_row(&phone_main, mtm),
+            ],
+        );
         let footer = chrome_bar(&more, None, Some(&quit_main), mtm);
         let main_slack = NSView::new(mtm);
         stretch(&main_slack);
@@ -441,6 +498,7 @@ impl NativePanel {
         arrange(&main_stack, &primary);
         spacer(&main_stack, PRIMARY_CLUSTER_GAP, mtm);
         arrange(&main_stack, &sleep_host);
+        arrange(&main_stack, &quick_card);
         arrange(&main_stack, &main_slack);
         arrange(&main_stack, &footer);
         pin_fill(&main_view, nv(&*main_stack));
@@ -448,6 +506,7 @@ impl NativePanel {
         span_stack(&main_stack, nv(&*status));
         span_stack(&main_stack, nv(&*primary));
         span_stack(&main_stack, &sleep_host);
+        span_stack(&main_stack, nv(&*quick_card));
         span_stack(&main_stack, &main_slack);
         span_stack(&main_stack, nv(&*footer));
 
@@ -460,14 +519,16 @@ impl NativePanel {
         let (resleep_settings_label, resleep_settings, resleep_settings_row) =
             labeled_switch(&target, TAG_RESLEEP, mtm);
         let (lock_label, lock, lock_row) = labeled_switch(&target, TAG_LOCK, mtm);
+        lock_label.setFont(Some(&NSFont::systemFontOfSize(11.5)));
         let (battery_settings_label, battery_settings, battery_settings_row) =
             labeled_switch(&target, TAG_BATTERY, mtm);
         let (login_label, login, login_row) = labeled_switch(&target, TAG_LOGIN, mtm);
         let pairing_label = row_caption(mtm);
         let pairing_value = row_caption(mtm);
         pairing_value.setSelectable(true);
-        pairing_value.setAlignment(NSTextAlignment::Right);
-        pairing_value.setFont(Some(&tabular_font(13.0)));
+        pairing_value.setAlignment(NSTextAlignment::Center);
+        pairing_value.setFont(Some(&tabular_font(22.0)));
+        let phone_settings = text_button(&target, sel!(phoneBoard:), mtm);
         let settings_card = grouped_card(
             mtm,
             &[
@@ -478,9 +539,17 @@ impl NativePanel {
                 lock_row,
                 battery_settings_row,
                 login_row,
-                control_row(&pairing_label, nv(&*pairing_value), mtm),
+                navigation_row(&phone_settings, mtm),
             ],
         );
+        let pairing_qr = NSImageView::new(mtm);
+        pairing_qr
+            .heightAnchor()
+            .constraintEqualToConstant(160.0)
+            .setActive(true);
+        let pairing_copy = push_button(&target, sel!(copyPairing:), NSBezelStyle::Push, mtm);
+        let pairing_hint = wrap_to(mtm, 11.0, panel_inner_width());
+        pairing_hint.setAlignment(NSTextAlignment::Center);
         let language = NSSegmentedControl::new(mtm);
         language.setSegmentCount(2);
         language.setTrackingMode(NSSegmentSwitchTracking::SelectOne);
@@ -514,14 +583,45 @@ impl NativePanel {
         arrange(&settings_stack, &settings_card);
         spacer(&settings_stack, 12.0, mtm);
         arrange(&settings_stack, &language);
+
         arrange(&settings_stack, &settings_slack);
         arrange(&settings_stack, &settings_footer);
         pin_fill(&settings_view, nv(&*settings_stack));
         span_stack(&settings_stack, nv(&*settings_head));
         span_stack(&settings_stack, nv(&*settings_card));
         span_stack(&settings_stack, nv(&*language));
+
         span_stack(&settings_stack, &settings_slack);
         span_stack(&settings_stack, nv(&*settings_footer));
+
+        let pairing_back = icon_button(&target, sel!(back:), "chevron.left", mtm);
+        let pairing_title = heading(mtm, 13.0);
+        let pairing_head = sheet_head(&pairing_back, &pairing_title, mtm);
+        let pairing_stack = column(mtm, 0.0, CONTENT_INSET);
+        pairing_stack.setAlignment(NSLayoutAttribute::CenterX);
+        arrange(&pairing_stack, &pairing_head);
+        spacer(&pairing_stack, 16.0, mtm);
+        arrange(&pairing_stack, &pairing_hint);
+        spacer(&pairing_stack, 16.0, mtm);
+        arrange(&pairing_stack, &pairing_qr);
+        spacer(&pairing_stack, 16.0, mtm);
+        arrange(&pairing_stack, &pairing_label);
+        spacer(&pairing_stack, 6.0, mtm);
+        arrange(&pairing_stack, &pairing_value);
+        spacer(&pairing_stack, 12.0, mtm);
+        arrange(&pairing_stack, &pairing_copy);
+        let pairing_slack = NSView::new(mtm);
+        stretch(&pairing_slack);
+        arrange(&pairing_stack, &pairing_slack);
+        pin_fill(&pairing_view, nv(&*pairing_stack));
+        for view in [
+            nv(&*pairing_head),
+            nv(&*pairing_hint),
+            nv(&*pairing_qr),
+            nv(&*pairing_copy),
+        ] {
+            span_stack(&pairing_stack, view);
+        }
 
         let help_back = icon_button(&target, sel!(back:), "chevron.left", mtm);
         let help_title = heading(mtm, 13.0);
@@ -647,6 +747,24 @@ impl NativePanel {
             battery_settings,
             login_label,
             login,
+            quick_duration,
+            quick_duration_label,
+            quick_screen,
+            quick_screen_label,
+            quick_card,
+            status_stack: status,
+            sleep_host,
+            phone_main,
+            phone_settings,
+            pairing_view,
+            pairing_open: false,
+            pairing_title,
+            pairing_back,
+            pairing_url: String::new(),
+            pairing_lang: None,
+            pairing_qr,
+            pairing_copy,
+            pairing_hint,
             pairing_label,
             pairing_value,
             language,
@@ -695,6 +813,41 @@ impl NativePanel {
         self.sleep_now
             .setAccessibilityLabel(Some(&ns(&state.sleep_now_label)));
         self.sleep_now.setHidden(!state.show_sleep_now);
+        set_text(&self.quick_duration_label, &state.duration_label);
+        self.quick_duration.removeAllItems();
+        for title in [
+            &state.duration_indefinite,
+            &state.duration_1h,
+            &state.duration_3h,
+            &state.duration_8h,
+            &state.duration_until,
+        ] {
+            self.quick_duration.addItemWithTitle(&ns(title));
+        }
+        self.quick_duration
+            .selectItemAtIndex(state.duration.index());
+        set_switch_row(
+            &self.quick_screen_label,
+            &self.quick_screen,
+            &state.screen_off_label,
+            state.screen_off,
+        );
+        self.quick_card.setHidden(state.active);
+        self.sleep_host.setHidden(!state.active);
+        self.status_stack.setDetachesHiddenViews(!state.active);
+        self.warning
+            .setHidden(!state.active || state.warning.is_empty());
+        let warning_tip = ns(&state.warning);
+        self.status_title.setToolTip(if state.warning.is_empty() {
+            None
+        } else {
+            Some(&warning_tip)
+        });
+        let phone_title = format!("{}  ›", state.pairing_label);
+        self.phone_main.setTitle(&ns(&phone_title));
+        self.phone_settings.setTitle(&ns(&phone_title));
+        set_text(&self.pairing_title, &state.pairing_label);
+        self.pairing_back.setToolTip(Some(&ns(&state.back)));
         set_text(&self.duration_label, &state.duration_label);
         self.duration.removeAllItems();
         self.duration
@@ -745,7 +898,41 @@ impl NativePanel {
             &state.launch_at_login_label,
             state.launch_at_login,
         );
-        set_text(&self.pairing_label, &state.pairing_label);
+        let zh = state.lang == never_sleep_core::Lang::Zh;
+        let changed = *self._target.ivars().pairing_code.borrow() != state.pairing_code;
+        if changed || self.pairing_lang != Some(state.lang) {
+            *self._target.ivars().pairing_code.borrow_mut() = state.pairing_code.clone();
+            self.pairing_copy.setTitle(&ns(if zh {
+                "复制配对码"
+            } else {
+                "Copy pairing code"
+            }));
+        }
+        self.pairing_copy.setEnabled(!state.pairing_code.is_empty());
+        self.pairing_lang = Some(state.lang);
+        if self.pairing_url != state.pairing_url {
+            let qr = pairing_qr_image(&state.pairing_url);
+            self.pairing_qr.setImage(qr.as_deref());
+            self.pairing_url.clone_from(&state.pairing_url);
+        }
+        set_text(
+            &self.pairing_hint,
+            if state.pairing_code.is_empty() {
+                if zh {
+                    "连接后将自动生成新的配对码"
+                } else {
+                    "A new code appears when connected"
+                }
+            } else if zh {
+                "用手机相机扫描二维码，即可打开看板并配对这台 Mac。"
+            } else {
+                "Scan with your phone camera to open the board and pair this Mac."
+            },
+        );
+        set_text(
+            &self.pairing_label,
+            if zh { "配对码" } else { "Pairing code" },
+        );
         set_text(
             &self.pairing_value,
             if state.pairing_code.is_empty() {
@@ -837,7 +1024,17 @@ impl NativePanel {
         self.show_pane(SidebarItem::Display);
     }
 
+    pub fn show_pairing(&mut self) {
+        self.pairing_open = true;
+        self.apply_view();
+    }
+
     pub fn go_back(&mut self) {
+        if self.pairing_open {
+            self.pairing_open = false;
+            self.apply_view();
+            return;
+        }
         match self.current {
             PanelView::Help => {
                 let item = match help_back_target(self.help_from) {
@@ -851,16 +1048,20 @@ impl NativePanel {
     }
 
     pub fn show_pane(&mut self, item: SidebarItem) {
+        self.pairing_open = false;
         let _ = item.symbol();
         self.current = item.as_panel_view();
         self.apply_view();
     }
 
     fn apply_view(&self) {
-        self.main_view.setHidden(self.current != PanelView::Main);
+        self.pairing_view.setHidden(!self.pairing_open);
+        self.main_view
+            .setHidden(self.pairing_open || self.current != PanelView::Main);
         self.settings_view
-            .setHidden(self.current != PanelView::Settings);
-        self.help_view.setHidden(self.current != PanelView::Help);
+            .setHidden(self.pairing_open || self.current != PanelView::Settings);
+        self.help_view
+            .setHidden(self.pairing_open || self.current != PanelView::Help);
     }
 
     fn set_active(&self, active: bool, animate: bool) {
@@ -1295,6 +1496,25 @@ fn duration_row(
     control_row(caption, nv(popup), mtm)
 }
 
+/// The entire row is the navigation target, including its trailing chevron.
+fn navigation_row(button: &NSButton, mtm: MainThreadMarker) -> Retained<NSStackView> {
+    button.setAlignment(NSTextAlignment::Left);
+    let row = column(mtm, 0.0, 0.0);
+    row.setEdgeInsets(NSEdgeInsets {
+        top: 0.0,
+        left: CARD_ROW_INSET_X,
+        bottom: 0.0,
+        right: CARD_ROW_INSET_X,
+    });
+    arrange(&row, button);
+    span_stack(&row, nv(button));
+    nv(button)
+        .heightAnchor()
+        .constraintEqualToConstant(CARD_ROW_HEIGHT)
+        .setActive(true);
+    row
+}
+
 fn control_row(
     caption: &NSTextField,
     control: &NSView,
@@ -1594,29 +1814,52 @@ fn set_coin_flip(
 }
 
 fn set_rotation_y(layer: &CALayer, from: f64, to: f64, duration: f64) {
+    let key_path = ns("transform.rotation.y");
+    // Read the onscreen pose before removing the previous animation. A quick
+    // reversal must not jump back to the previous state's resting face.
+    let from = if duration > 0.0 {
+        unsafe {
+            layer.presentationLayer().map_or(from, |presentation| {
+                let value: Retained<AnyObject> =
+                    msg_send![&*presentation, valueForKeyPath: &*key_path];
+                msg_send![&*value, doubleValue]
+            })
+        }
+    } else {
+        from
+    };
     let to_num = ns_double(to);
     CATransaction::begin();
     CATransaction::setDisableActions(true);
     layer.removeAnimationForKey(&ns("flip"));
+    unsafe {
+        let _: () = msg_send![layer, setValue: &*to_num, forKeyPath: &*key_path];
+    }
     if duration > 0.0 {
-        if let Some(cls) = AnyClass::get(c"CABasicAnimation") {
+        if let Some(cls) = AnyClass::get(c"CASpringAnimation") {
             unsafe {
-                let anim: Retained<AnyObject> =
-                    msg_send![cls, animationWithKeyPath: &*ns("transform.rotation.y")];
-                let _: () = msg_send![&*anim, setDuration: duration];
+                let anim: Retained<AnyObject> = msg_send![cls, animationWithKeyPath: &*key_path];
                 let _: () = msg_send![&*anim, setFromValue: &*ns_double(from)];
                 let _: () = msg_send![&*anim, setToValue: &*to_num];
+                // Near-critical damping gives the coin weight: one restrained
+                // overshoot (under one degree), followed by a quiet landing.
+                let _: () = msg_send![&*anim, setMass: 1.0_f64];
+                let _: () = msg_send![&*anim, setStiffness: 240.0_f64];
+                let _: () = msg_send![&*anim, setDamping: 27.0_f64];
+                let _: () = msg_send![&*anim, setInitialVelocity: 0.0_f64];
+                // Play the complete spring solution within the panel's motion
+                // budget, rather than cutting a still-moving spring short.
+                let settling: f64 = msg_send![&*anim, settlingDuration];
+                let _: () = msg_send![&*anim, setDuration: settling];
+                let _: () = msg_send![&*anim, setSpeed: (settling / duration) as f32];
                 if let Some(tf_cls) = AnyClass::get(c"CAMediaTimingFunction") {
                     let tf: Retained<AnyObject> =
-                        msg_send![tf_cls, functionWithName: &*ns("easeInEaseOut")];
+                        msg_send![tf_cls, functionWithName: &*ns("linear")];
                     let _: () = msg_send![&*anim, setTimingFunction: &*tf];
                 }
                 let _: () = msg_send![layer, addAnimation: &*anim, forKey: &*ns("flip")];
             }
         }
-    }
-    unsafe {
-        let _: () = msg_send![layer, setValue: &*to_num, forKeyPath: &*ns("transform.rotation.y")];
     }
     CATransaction::commit();
 }
@@ -1761,4 +2004,40 @@ fn layer_set_shadow_offset(layer: &CALayer, width: f64, height: f64) {
     unsafe {
         let _: () = msg_send![layer, setShadowOffset: size];
     }
+}
+
+/// Encode locally: pairing credentials never leave the app for QR generation.
+fn pairing_qr_image(url: &str) -> Option<Retained<NSImage>> {
+    if url.is_empty() {
+        return None;
+    }
+    let qr = qrcode::QrCode::new(url).ok()?;
+    let scale = 4;
+    let width = (qr.width() + 8) * scale;
+    let stride = (width * 3 + 3) & !3;
+    let size = 54 + stride * width;
+    let mut bmp = vec![255u8; size];
+    bmp[..54].fill(0);
+    bmp[..2].copy_from_slice(b"BM");
+    bmp[2..6].copy_from_slice(&(size as u32).to_le_bytes());
+    bmp[10..14].copy_from_slice(&54u32.to_le_bytes());
+    bmp[14..18].copy_from_slice(&40u32.to_le_bytes());
+    bmp[18..22].copy_from_slice(&(width as i32).to_le_bytes());
+    bmp[22..26].copy_from_slice(&(-(width as i32)).to_le_bytes());
+    bmp[26..28].copy_from_slice(&1u16.to_le_bytes());
+    bmp[28..30].copy_from_slice(&24u16.to_le_bytes());
+    for y in 0..qr.width() {
+        for x in 0..qr.width() {
+            if qr[(x, y)] == qrcode::Color::Dark {
+                for dy in 0..scale {
+                    for dx in 0..scale {
+                        let offset =
+                            54 + ((y + 4) * scale + dy) * stride + ((x + 4) * scale + dx) * 3;
+                        bmp[offset..offset + 3].fill(0);
+                    }
+                }
+            }
+        }
+    }
+    load_png(&bmp).ok()
 }

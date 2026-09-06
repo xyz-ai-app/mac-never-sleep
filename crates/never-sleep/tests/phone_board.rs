@@ -380,3 +380,27 @@ fn readme_describes_pairing_and_remote_standby() {
     assert!(en.contains(&format!("{SITE_ORIGIN}/board/")));
     assert!(zh.contains(&format!("{SITE_ORIGIN}/zh/board/")));
 }
+
+#[test]
+fn pairing_and_home_offer_direct_actions() {
+    let native = read("crates/never-sleep/src/native_panel.rs");
+    assert!(
+        native.contains("copyPairing:"),
+        "pairing needs a copy action"
+    );
+    assert!(
+        native.contains("pairing_qr"),
+        "pairing needs a local QR image"
+    );
+    assert!(
+        native.contains("quick_duration"),
+        "home needs a duration shortcut"
+    );
+    let js = read("site/assets/board.js");
+    assert!(
+        js.contains("device-coin"),
+        "phone uses the app state illustration"
+    );
+    assert!(js.contains("startBtn.hidden = st.active"));
+    assert!(js.contains("endBtn.hidden = !st.active"));
+}
