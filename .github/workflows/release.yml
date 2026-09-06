@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag (e.g. v0.1.0). Leave empty to use CFBundleShortVersionString from Info.plist."
+        description: "Release tag (e.g. v0.1.0). Leave empty to use [workspace.package] version from Cargo.toml."
         required: false
         default: ""
       prerelease:
@@ -37,7 +37,7 @@ jobs:
         env:
           INPUT_TAG: ${{ github.event.inputs.tag }}
         run: |
-          version="$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" packaging/Info.plist)"
+          version="$(./scripts/bump-version.sh --print)"
           tag="${INPUT_TAG}"
           if [ -z "$tag" ]; then
             tag="v${version}"

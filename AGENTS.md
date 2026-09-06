@@ -23,7 +23,7 @@ JSON output, CLI flag names, and IPC `cmd` tags are an Agent API. Changing them 
 crates/never-sleep-core   policy only (Engine, config, i18n, duration). Unit-tested on Linux.
 crates/never-sleep        CLI + macOS menu bar + IOKit platform layer.
 packaging/                Info.plist, localizations, optional AppIcon.icns
-scripts/                  package-macos.sh, icon generation
+scripts/                  package-macos.sh, bump-version.sh, icon generation
 .github/workflows/ci.yml  fmt + clippy + tests on Linux; test/build/package on macOS
 ```
 
@@ -54,6 +54,7 @@ Before editing `native_panel.rs` or popover wiring in `gui.rs`:
 cargo fmt --all
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
+./scripts/bump-version.sh --check
 ```
 
 macOS only (GUI + IOKit):
@@ -141,4 +142,4 @@ Closed-lid stay-awake is **best effort**. The reliable path is lid open + displa
 - Imperative commit subject, product language: `Add battery-floor tests`, not `fix stuff`.
 - One logical change per commit when practical (policy+tests can land together after the TDD cycle).
 - PR description: what behaviour changed, which tests lock it, and that clippy is warning-free.
-- Do not bump `version` in `Cargo.toml` unless the user asked for a release.
+- Do not bump the version unless the user asked for a release. Use `./scripts/bump-version.sh x.y.z` — do not hand-edit `packaging/Info.plist` or the marketing-page version strings.

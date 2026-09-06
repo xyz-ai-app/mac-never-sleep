@@ -23,6 +23,7 @@ rm -rf "$DIST"
 mkdir -p "$MACOS_DIR" "$RES_DIR"
 cp "$BIN" "$MACOS_DIR/never-sleep"
 cp "$ROOT/packaging/Info.plist" "$DIST/Contents/Info.plist"
+"$ROOT/scripts/bump-version.sh" --stamp-plist "$DIST/Contents/Info.plist"
 cp -R "$ROOT/packaging/en.lproj" "$RES_DIR/en.lproj"
 cp -R "$ROOT/packaging/zh-Hans.lproj" "$RES_DIR/zh-Hans.lproj"
 
