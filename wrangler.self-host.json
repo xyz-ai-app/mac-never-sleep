@@ -1,0 +1,54 @@
+{
+  "$schema": "https://unpkg.com/wrangler@4.128.0/config-schema.json",
+  "name": "never-sleep-personal",
+  "main": "worker/src/index.js",
+  "compatibility_date": "2026-09-01",
+  "workers_dev": true,
+  "preview_urls": false,
+  "assets": {
+    "directory": "./site",
+    "binding": "ASSETS",
+    "not_found_handling": "404-page",
+    "html_handling": "auto-trailing-slash",
+    "run_worker_first": [
+      "/api/*"
+    ]
+  },
+  "ratelimits": [
+    {
+      "name": "DEVICE_IP_RATE",
+      "namespace_id": "76351001",
+      "simple": {
+        "limit": 540,
+        "period": 60
+      }
+    },
+    {
+      "name": "DEVICE_EDGE_RATE",
+      "namespace_id": "76351002",
+      "simple": {
+        "limit": 12060,
+        "period": 60
+      }
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "BOARD",
+        "class_name": "BoardHub"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": [
+        "BoardHub"
+      ]
+    }
+  ],
+  "observability": {
+    "enabled": false
+  }
+}

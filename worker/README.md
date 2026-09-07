@@ -1,3 +1,7 @@
+# Deployment
+
+For a personal Cloudflare deployment, use the [self-hosting guide](../docs/self-host.md) ([简体中文](../docs/self-host.zh-CN.md)) and `wrangler.self-host.json`. The root `wrangler.jsonc` is reserved for the project gateway deployment.
+
 # Live transport
 
 `GET /api/socket?device_id=<32 hex>&role=mac|viewer` upgrades to WebSocket.

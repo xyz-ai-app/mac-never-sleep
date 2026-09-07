@@ -201,3 +201,7 @@ Requires **Rust 1.88+** and macOS 12+. The menu bar runs as `LSUIElement` and do
 ## License
 
 MIT
+
+## Self-host on Cloudflare
+
+Prefer your own infrastructure? Follow the [Cloudflare self-hosting guide](docs/self-host.md) to deploy the phone board and API in your own account and connect your Mac directly. Device traffic bypasses the public service; Cloudflare still processes the data (no end-to-end encryption). Remote access remains optional and off by default.

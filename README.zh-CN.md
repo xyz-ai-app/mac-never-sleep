@@ -201,3 +201,7 @@ IPC 套接字：同目录 `ipc.sock`
 ## 许可
 
 MIT
+
+## Cloudflare 自部署
+
+希望自己掌握服务和数据？按照 [Cloudflare 自部署指南](docs/self-host.zh-CN.md)，将手机看板和 API 部署到自己的账户，让 Mac 直接连接，减少公共服务负载。设备数据不经过项目公共服务，但仍由 Cloudflare 处理，目前没有端到端加密。远程访问保持可选、默认关闭。
